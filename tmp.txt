@@ -1,0 +1,520 @@
+// main.go
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"syscall"
+	"strings"
+	"time"
+	"github.com/google/go-containerregistry/pkg/crane"
+	"github.com/vishvananda/netlink"
+	"net"
+	"crypto/rand"
+) 
+
+const GockerStorage = "/var/lib/gocker"
+const BridgeName = "gocker0"
+const BridgeIP = "10.20.0.1/24"
+
+// main 函數是程式的入口，它會根據傳入的參數決定要執行父行程還是子行程的邏輯
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Println("用法: gocker run <command>")
+		return
+	}
+
+	switch os.Args[1] {
+	case "run":
+		runParentProcess()
+	case "child":
+		runChildProcess()
+	case "pull":
+		pullImage()
+	case "images":
+		listImages()
+	default:
+		fmt.Printf("未知的命令: %s\n", os.Args[1])
+	}
+}
+
+// runParentProcess 執行父行程的邏輯
+func runParentProcess() {
+    fmt.Printf("父行程: 準備啟動容器... PID: %d\n", os.Getpid())
+	
+    childArgs := append([]string{"child"}, os.Args[2:]...)
+    cmd := exec.Command("/proc/self/exe", childArgs...)
+    cmd.SysProcAttr = &syscall.SysProcAttr{
+        Cloneflags: syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWUTS | syscall.CLONE_NEWIPC | syscall.CLONE_NEWNET,
+    }
+    cmd.Stdin = os.Stdin
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
+
+    if err := setupBridge(); err != nil {
+        panic(fmt.Sprintf("設定主機網橋失敗: %v", err))
+    }
+
+    if err := cmd.Start(); err != nil {
+        fmt.Printf("錯誤: 執行 cmd.Start() 失敗: %v", err)
+        os.Exit(1)
+    }
+
+    childPid := cmd.Process.Pid
+    fmt.Printf("子行程 PID: %d\n", childPid)
+
+    // 等待子行程完成初始化
+    time.Sleep(100 * time.Millisecond)
+
+    // 在子行程啟動後，為其設定網路
+    if err := setupContainerNetwork(childPid); err != nil {
+        fmt.Printf("警告: 設定容器網路失敗: %v\n", err)
+        // 不要 panic，讓容器繼續運行但可能沒有網路功能
+    }
+
+    cmd.Wait()
+}
+
+// setupContainerNetwork 為容器設定網路
+func setupContainerNetwork(childPid int) error {
+    vethName := fmt.Sprintf("veth-%d", childPid)
+    peerName := fmt.Sprintf("peer-%d", childPid)
+
+    // 建立 veth pair
+    veth := &netlink.Veth{
+        LinkAttrs: netlink.LinkAttrs{Name: vethName, MTU: 1500},
+        PeerName:  peerName,
+    }
+    if err := netlink.LinkAdd(veth); err != nil {
+        return fmt.Errorf("建立 veth pair 失敗: %v", err)
+    }
+
+    // 將主機端的 veth 連接到網橋
+    bridge, err := netlink.LinkByName(BridgeName)
+    if err != nil {
+        return fmt.Errorf("找不到網橋: %v", err)
+    }
+    
+    hostVeth, err := netlink.LinkByName(vethName)
+    if err != nil {
+        return fmt.Errorf("找不到主機端 veth: %v", err)
+    }
+    
+    if err := netlink.LinkSetMaster(hostVeth, bridge); err != nil {
+        return fmt.Errorf("將 veth 連接到網橋失敗: %v", err)
+    }
+    
+    if err := netlink.LinkSetUp(hostVeth); err != nil {
+        return fmt.Errorf("啟動主機端 veth 失敗: %v", err)
+    }
+
+    // 將容器端的 veth 移入容器的網路 namespace
+    peer, err := netlink.LinkByName(peerName)
+    if err != nil {
+        return fmt.Errorf("找不到容器端 veth: %v", err)
+    }
+    
+    if err := netlink.LinkSetNsPid(peer, childPid); err != nil {
+        return fmt.Errorf("將 veth peer 移入子行程 namespace 失敗: %v", err)
+    }
+
+    return nil
+}
+
+// runChildProcess 執行子行程的邏輯 (這部分程式碼在新的 Namespace 中執行)
+func runChildProcess() {
+	fmt.Printf("子行程: 在新的 Namespace 中執行... PID: %d\n", os.Getpid())
+
+	// 1. 設定容器的主機名稱
+	syscall.Sethostname([]byte("gocker-container"))
+
+	// 2. 準備並切換根目錄 (Pivot Root)
+	imageName := os.Args[2]
+	
+	mergedDir, err := setupOverlayFS(imageName)
+	if err != nil {
+		panic(fmt.Sprintf("準備 OverlayFS 失敗: %v", err))
+	}
+
+	pivotRoot(mergedDir)
+
+	// 3. 掛載 /proc
+	if err := syscall.Mount("proc", "/proc", "proc", 0, ""); err != nil {
+		panic(fmt.Sprintf("掛載 /proc 失敗: %v", err))
+	}
+	
+	// 4. 設定 Cgroup
+	setupCgroup()
+
+	// 5. 設定容器內的網路
+	configureContainerNetwork()
+
+	// 6. 設定 DNS
+	setupDNS()
+
+	// 7. 使用 syscall.Exec 來執行使用者指定的命令
+	userCmd := os.Args[3]
+	userArgs := os.Args[3:]
+
+	if err := syscall.Exec(userCmd, userArgs, os.Environ()); err != nil {
+		panic(fmt.Sprintf("syscall.Exec 在 '%s' 上失敗: %v", userCmd, err))
+	}
+}
+
+func pullImage() {
+	if len(os.Args) < 3 {
+		fmt.Println("用法: gocker pull <image_name>")
+		return
+	}
+	imageName := os.Args[2]
+	fmt.Printf("正在拉取映像: %s\n", imageName)
+
+	// 1. 使用 crane 拉取映像物件
+	img, err := crane.Pull(imageName)
+	if err != nil {
+		panic(fmt.Sprintf("拉取映像 '%s' 失敗: %v", imageName, err))
+	}
+
+	// 2. 準備儲存路徑
+	imagesDir := filepath.Join(GockerStorage, "images")
+	os.MkdirAll(imagesDir, 0755)
+	imageTarPath := filepath.Join(imagesDir, strings.Replace(imageName, ":", "_", 1)+".tar")
+
+	// 3. 建立目標檔案
+	f, err := os.Create(imageTarPath)
+	if err != nil {
+		panic(fmt.Sprintf("建立映像檔案 '%s' 失敗: %v", imageTarPath, err))
+	}
+	defer f.Close()
+
+	// 4. 使用 crane.Export 將映像攤平並寫入檔案
+	if err := crane.Export(img, f); err != nil {
+		panic(fmt.Sprintf("匯出映像到 '%s' 失敗: %v", imageTarPath, err))
+	}
+
+	fmt.Printf("成功拉取並匯出 Rootfs 到: %s\n", imageTarPath)
+}
+
+func listImages() {
+	imagesDir := filepath.Join(GockerStorage, "images")
+	files, err := os.ReadDir(imagesDir)
+	if err != nil {
+		panic(fmt.Sprintf("讀取映像目錄 '%s' 失敗: %v", imagesDir, err))
+	}
+
+	fmt.Println("本地映像列表:")
+	for _, file := range files {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".tar") {
+			fmt.Println(file.Name())
+		}
+	}
+}
+
+// pivotRoot 負責切換根目錄
+func pivotRoot(newRoot string) {
+	// 將根目錄的掛載傳播類型設為 private
+	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
+		panic(fmt.Sprintf("將根掛載設為 private 失敗: %v", err))
+	}
+
+	putold := filepath.Join(newRoot, ".old_root")
+
+	// 確保 newRoot 是掛載點
+	if err := syscall.Mount(newRoot, newRoot, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+		panic(fmt.Sprintf("重新掛載 newRoot 失敗: %v", err))
+	}
+
+	// 建立 .old_root 目錄
+	if err := os.MkdirAll(putold, 0700); err != nil {
+		panic(fmt.Sprintf("建立 .old_root 失敗: %v", err))
+	}
+
+	// 執行 pivot_root
+	if err := syscall.PivotRoot(newRoot, putold); err != nil {
+		panic(fmt.Sprintf("pivot_root 失敗: %v", err))
+	}
+
+	// 切換到新的根目錄
+	if err := os.Chdir("/"); err != nil {
+		panic(fmt.Sprintf("chdir 到 / 失敗: %v", err))
+	}
+
+	// 卸載並移除舊的根目錄
+	if err := syscall.Unmount("/.old_root", syscall.MNT_DETACH); err != nil {
+		panic(fmt.Sprintf("卸載 .old_root 失敗: %v", err))
+	}
+	os.RemoveAll("/.old_root")
+}
+
+// setupCgroup 設定 Cgroup
+func setupCgroup() {
+	cgroupRoot := "/sys/fs/cgroup"
+	gockerCgroupPath := filepath.Join(cgroupRoot, "gocker")
+
+	// 建立 gocker cgroup 父目錄
+	if err := os.MkdirAll(gockerCgroupPath, 0755); err != nil {
+		// 如果目錄已存在，錯誤會被忽略
+	}
+	
+	// 啟用 CPU 和 Memory 控制器
+	if err := os.WriteFile(filepath.Join(cgroupRoot, "cgroup.subtree_control"), []byte("+cpu +memory"), 0644); err != nil {
+		// 忽略錯誤，可能已經被其他程式啟用
+	}
+
+	// 設定 CPU 和 Memory 限制
+	// 50% CPU
+	os.WriteFile(filepath.Join(gockerCgroupPath, "cpu.max"), []byte("50000 100000"), 0644)
+	// 100MB Memory
+	os.WriteFile(filepath.Join(gockerCgroupPath, "memory.max"), []byte("100M"), 0644)
+
+	// 將目前的子行程 PID 加入 cgroup
+	pid := os.Getpid()
+	if err := os.WriteFile(filepath.Join(gockerCgroupPath, "cgroup.procs"), []byte(strconv.Itoa(pid)), 0644); err != nil {
+		panic(fmt.Sprintf("將 PID 加入 cgroup 失敗: %v", err))
+	}
+	fmt.Printf("子行程 PID %d 已加入 gocker cgroup\n", pid)
+}
+
+func setupOverlayFS(imageName string) (string, error) {
+	// 產生一個隨機的容器 ID
+	containerIDBytes := make([]byte, 8)
+	rand.Read(containerIDBytes)
+	containerID := fmt.Sprintf("%x", containerIDBytes)
+
+	// 1. 定義 OverlayFS 所需的各層路徑
+	imageTarPath := filepath.Join(GockerStorage, "images", strings.Replace(imageName, ":", "_", 1)+".tar")
+	
+	// 檢查映像檔案是否存在
+	if _, err := os.Stat(imageTarPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("映像檔案不存在: %s (請先執行 'gocker pull %s')", imageTarPath, imageName)
+	}
+	
+	containerDir := filepath.Join(GockerStorage, "containers", containerID)
+	
+	// lowerdir (唯讀層)，我們需要將映像 tar 解開
+	lowerDir := filepath.Join(containerDir, "lower") 
+	os.MkdirAll(lowerDir, 0755)
+
+	// 解壓縮映像 tar 檔案到 lowerDir
+	fmt.Printf("正在解壓縮映像: %s\n", imageTarPath)
+	cmd := exec.Command("tar", "-xf", imageTarPath, "-C", lowerDir)
+	
+	// 添加詳細的錯誤輸出
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+	
+	if err := cmd.Run(); err != nil {
+		// 嘗試檢查 tar 檔案的內容
+		fmt.Printf("解壓縮失敗，檢查 tar 檔案內容...\n")
+		checkCmd := exec.Command("tar", "-tf", imageTarPath)
+		checkCmd.Stdout = os.Stdout
+		checkCmd.Stderr = os.Stderr
+		checkCmd.Run()
+		
+		return "", fmt.Errorf("解壓縮映像 '%s' 失敗: %v", imageTarPath, err)
+	}
+
+	// upperdir (可寫層)
+	upperDir := filepath.Join(containerDir, "upper")
+	os.MkdirAll(upperDir, 0755)
+	
+	// workdir (工作目錄)
+	workDir := filepath.Join(containerDir, "work")
+	os.MkdirAll(workDir, 0755)
+	
+	// merged (最終掛載點)
+	mergedDir := filepath.Join(containerDir, "merged")
+	os.MkdirAll(mergedDir, 0755)
+
+	// 2. 執行 mount 系統呼叫
+	// 組合 data 選項字串
+	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
+	
+	if err := syscall.Mount("overlay", mergedDir, "overlay", 0, opts); err != nil {
+		return "", fmt.Errorf("掛載 OverlayFS 失敗: %v", err)
+	}
+
+	fmt.Printf("成功建立並掛載 OverlayFS 於: %s\n", mergedDir)
+	return mergedDir, nil
+}
+
+func setupBridge() error {
+	// 1. 檢查網橋是否已經存在
+	iface, err := netlink.LinkByName(BridgeName)
+	if err == nil {
+		fmt.Printf("網橋 '%s' 已經存在\n", BridgeName)
+		// 檢查 IP 是否已設定
+		addrs, _ := netlink.AddrList(iface, netlink.FAMILY_V4)
+		if len(addrs) == 0 {
+			// 如果網橋存在但沒有 IP, 則新增 IP
+			addr, _ := netlink.ParseAddr(BridgeIP)
+			return netlink.AddrAdd(iface, addr)
+		}
+		return nil // 網橋和 IP 都已存在
+	}
+
+	// 2. 建立網橋
+	fmt.Printf("建立網橋 '%s'\n", BridgeName)
+	bridge := &netlink.Bridge{
+		LinkAttrs: netlink.LinkAttrs{
+			Name: BridgeName,
+		},
+	}
+	if err := netlink.LinkAdd(bridge); err != nil {
+		return fmt.Errorf("建立網橋失敗: %v", err)
+	}
+
+	// 3. 設定網橋的 IP 位址
+	addr, err := netlink.ParseAddr(BridgeIP)
+	if err != nil {
+		return fmt.Errorf("解析網橋 IP 失敗: %v", err)
+	}
+	if err := netlink.AddrAdd(bridge, addr); err != nil {
+		return fmt.Errorf("設定網橋 IP 失敗: %v", err)
+	}
+
+	// 4. 啟動網橋
+	if err := netlink.LinkSetUp(bridge); err != nil {
+		return fmt.Errorf("啟動網橋失敗: %v", err)
+	}
+
+	// 5. 設定 iptables 規則，讓容器可以上網
+	// 檢查並設定 MASQUERADE 規則
+	checkCmd := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING", "-s", "10.20.0.0/24", "!", "-o", BridgeName, "-j", "MASQUERADE")
+	if err := checkCmd.Run(); err != nil {
+		// 規則不存在，新增它
+		cmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", "10.20.0.0/24", "!", "-o", BridgeName, "-j", "MASQUERADE")
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("設定 iptables MASQUERADE 失敗: %v", err)
+		}
+		fmt.Println("已新增 iptables MASQUERADE 規則")
+	} else {
+		fmt.Println("iptables MASQUERADE 規則已存在")
+	}
+
+	// 設定 FORWARD 規則，允許容器網路的流量轉發
+	forwardRules := [][]string{
+		{"iptables", "-I", "FORWARD", "1", "-i", BridgeName, "-j", "ACCEPT"},
+		{"iptables", "-I", "FORWARD", "1", "-o", BridgeName, "-j", "ACCEPT"},
+	}
+
+	for _, rule := range forwardRules {
+		// 先檢查規則是否存在 (將 -I 改為 -C)
+		checkRule := make([]string, len(rule))
+		copy(checkRule, rule)
+		checkRule[1] = "-C"
+		checkRule = append(checkRule[:2], checkRule[4:]...) // 移除位置參數 "1"
+		
+		checkCmd := exec.Command(checkRule[0], checkRule[1:]...)
+		if err := checkCmd.Run(); err != nil {
+			// 規則不存在，新增它
+			addCmd := exec.Command(rule[0], rule[1:]...)
+			if err := addCmd.Run(); err != nil {
+				fmt.Printf("警告: 設定 FORWARD 規則失敗: %v\n", err)
+			} else {
+				fmt.Printf("已新增 FORWARD 規則: %s\n", strings.Join(rule[1:], " "))
+			}
+		}
+	}
+	
+	return nil
+}
+
+func configureContainerNetwork() {
+	ifaceName := "eth0"
+	containerIP := "10.20.0.2/24" // 為了簡化，MVP 先硬式編碼第一個容器的 IP
+	gatewayIP := "10.20.0.1"
+
+	// 等待一小段時間讓 veth peer 設定完成
+	time.Sleep(200 * time.Millisecond)
+
+	// 設定網路介面
+	setupNetworkInterface(ifaceName, containerIP, gatewayIP)
+
+	// 啟動 loopback 設備 (lo)
+	lo, err := netlink.LinkByName("lo")
+	if err != nil {
+		fmt.Printf("警告: 找不到 loopback 介面: %v\n", err)
+		return
+	}
+	
+	if err := netlink.LinkSetUp(lo); err != nil {
+		fmt.Printf("警告: 啟動 loopback 失敗: %v\n", err)
+	}
+
+	fmt.Println("容器內網路設定完成")
+}
+
+func setupDNS() {
+	// 建立 /etc/resolv.conf 檔案，設定 DNS 伺服器
+	resolv := `nameserver 8.8.8.8
+nameserver 8.8.4.4
+nameserver 1.1.1.1
+`
+	if err := os.WriteFile("/etc/resolv.conf", []byte(resolv), 0644); err != nil {
+		fmt.Printf("警告: 設定 DNS 失敗: %v\n", err)
+	} else {
+		fmt.Println("DNS 設定完成")
+	}
+}
+
+func setupNetworkInterface(ifaceName, containerIP, gatewayIP string) {
+	// 1. 找到可用的網路介面 (除了 lo)
+	links, err := netlink.LinkList()
+	if err != nil {
+		fmt.Printf("警告: 無法列出網路介面: %v\n", err)
+		return
+	}
+
+	var targetLink netlink.Link
+	for _, link := range links {
+		if link.Attrs().Name != "lo" {
+			targetLink = link
+			// 將介面重新命名為 eth0
+			if err := netlink.LinkSetName(link, ifaceName); err != nil {
+				fmt.Printf("警告: 重新命名網路介面失敗: %v\n", err)
+			}
+			break
+		}
+	}
+
+	if targetLink == nil {
+		fmt.Println("警告: 找不到可用的網路介面")
+		return
+	}
+
+	// 2. 重新獲取重新命名後的介面
+	iface, err := netlink.LinkByName(ifaceName)
+	if err != nil {
+		fmt.Printf("警告: 找不到網卡 %s: %v\n", ifaceName, err)
+		return
+	}
+
+	// 3. 設定 IP 位址
+	addr, err := netlink.ParseAddr(containerIP)
+	if err != nil {
+		fmt.Printf("警告: 解析容器 IP 失敗: %v\n", err)
+		return
+	}
+	
+	if err := netlink.AddrAdd(iface, addr); err != nil {
+		fmt.Printf("警告: 設定容器 IP 失敗: %v\n", err)
+	}
+
+	// 4. 啟動 eth0 網卡
+	if err := netlink.LinkSetUp(iface); err != nil {
+		fmt.Printf("警告: 啟動 eth0 失敗: %v\n", err)
+	}
+
+	// 5. 設定預設路由
+	route := &netlink.Route{
+		Scope: netlink.SCOPE_UNIVERSE,
+		Gw:    net.ParseIP(gatewayIP),
+	}
+	if err := netlink.RouteAdd(route); err != nil {
+		fmt.Printf("警告: 設定預設路由失敗: %v\n", err)
+	}
+}
