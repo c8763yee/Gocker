@@ -5,12 +5,41 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
 	"gocker/internal/container"
 	"gocker/internal/network"
+
+	"github.com/spf13/cobra"
 )
+
+var runCommand = &cobra.Command{
+	Use:   "run [OPTIONS] IMAGE COMMAND [ARG...]",
+	Short: "Run a command in a new container",
+	Long:  "Run a command in a new container with specified image and command.",
+	Args:  cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		imageName, imageTag := input_parse(args[0])
+		RunContainer(args)
+	},
+}
+
+func input_parse(input string) (string, string) {
+	s := strings.Split(input, ":")
+	if len(s) == 1 {
+		return s[0], "latest"
+	}
+	if len(s) == 2 {
+		return s[0], s[1]
+	}
+	return "", ""
+}
+
+func init() {
+	rootCmd.AddCommand(runCommand)
+}
 
 // RunContainer 執行父行程的邏輯
 func RunContainer(args []string) {

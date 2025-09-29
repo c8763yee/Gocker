@@ -27,4 +27,7 @@ const (
 	// 資源限制 (可在未來改為可配置)
 	CPULimit    = "50000 100000" // 50% CPU
 	MemoryLimit = "100M"         // 100MB Memory
+
+	// 日誌設定
+	DefaultLogLevel = "debug"
 )
