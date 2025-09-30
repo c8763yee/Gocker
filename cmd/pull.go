@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"os"
 
+	// "github.com/spf13/cobra"
+
 	"gocker/internal/image"
 )
 
-// PullImage 拉取容器映像
 func PullImage(args []string) {
 	if len(args) < 1 {
 		fmt.Println("用法: gocker pull <image_name>")

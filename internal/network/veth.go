@@ -6,6 +6,7 @@ import (
 
 	"gocker/internal/config"
 
+	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 )
 
@@ -77,4 +78,10 @@ func moveVethToContainer(peerName string, childPid int) error {
 	}
 
 	return netlink.LinkSetNsPid(peer, childPid)
+}
+
+func SetupVeth(pid int) error {
+	logrus.Infof("TODO: Setting up veth for PID %d", pid)
+	// 這裡未來要加入建立 veth、設定 bridge、將一端移入 network namespace 的邏輯
+	return nil // 暫時回傳 nil 讓編譯通過
 }

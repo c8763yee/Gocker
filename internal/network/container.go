@@ -8,25 +8,27 @@ import (
 
 	"gocker/internal/config"
 
+	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 )
 
 // ConfigureContainerNetwork 設定容器內的網路
-func ConfigureContainerNetwork() {
+func ConfigureContainerNetwork() error {
 	// 等待 veth peer 設定完成
 	time.Sleep(200 * time.Millisecond)
 
 	// 設定網路介面
 	if err := setupNetworkInterface(); err != nil {
-		fmt.Printf("警告: 設定網路介面失敗: %v\n", err)
+		return fmt.Errorf("設定網路介面失敗: %w", err)
 	}
 
 	// 啟動 loopback 介面
 	if err := setupLoopback(); err != nil {
-		fmt.Printf("警告: 設定 loopback 失敗: %v\n", err)
+		return fmt.Errorf("設定 loopback 介面失敗: %w", err)
 	}
 
-	fmt.Println("容器內網路設定完成")
+	logrus.Info("容器內網路設定完成")
+	return nil
 }
 
 // setupNetworkInterface 設定容器的網路介面

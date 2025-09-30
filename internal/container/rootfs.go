@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/sirupsen/logrus"
 )
 
 // PivotRoot 切換根目錄
@@ -45,4 +47,10 @@ func PivotRoot(newRoot string) {
 	if err := os.RemoveAll("/.old_root"); err != nil {
 		fmt.Printf("警告: 移除 .old_root 失敗: %v\n", err)
 	}
+}
+
+func SetupRootfs(imageName, imageTag string) error {
+	logrus.Infof("TODO: Setting up rootfs for image %s:%s", imageName, imageTag)
+	// 這裡未來要加入處理 OverlayFS、pivot_root 等邏輯
+	return nil // 暫時回傳 nil 讓編譯通過
 }
