@@ -56,7 +56,7 @@ func RunContainer(req *types.RunRequest) error {
 		Image:      fmt.Sprintf("%s:%s", req.ImageName, req.ImageTag),
 		MountPoint: filepath.Join(containerDir, "rootfs"), // 預先定義掛載點路徑
 	}
-	if err := writeContainerInfo(containerDir, info); err != nil {
+	if err := container.WriteContainerInfo(containerDir, info); err != nil {
 		return fmt.Errorf("寫入容器設定檔失敗: %w", err)
 	}
 
@@ -96,7 +96,7 @@ func RunContainer(req *types.RunRequest) error {
 	// 8. 更新 config.json，寫入 PID 並將狀態改為 Running
 	info.PID = childPid
 	info.Status = types.Running
-	if err := writeContainerInfo(containerDir, info); err != nil {
+	if err := container.WriteContainerInfo(containerDir, info); err != nil {
 		log.Warnf("更新容器狀態為 Running 失敗: %v", err)
 	}
 
@@ -125,7 +125,7 @@ func RunContainer(req *types.RunRequest) error {
 	log.Info("父行程: 容器已退出，更新狀態為 Stopped")
 	info.PID = 0 // 清理 PID
 	info.Status = types.Stopped
-	if err := writeContainerInfo(containerDir, info); err != nil {
+	if err := container.WriteContainerInfo(containerDir, info); err != nil {
 		log.Warnf("更新容器狀態為 Stopped 失敗: %v", err)
 	}
 
@@ -134,20 +134,6 @@ func RunContainer(req *types.RunRequest) error {
 	_ = container.CleanupCgroup(cgroupPath) // 這裡的清理可以根據策略決定是否保留
 
 	return nil
-}
-
-// writeContainerInfo 是一個輔助函式，用於將容器資訊寫入 config.json
-func writeContainerInfo(containerDir string, info *types.ContainerInfo) error {
-	configFilePath := filepath.Join(containerDir, "config.json")
-	file, err := os.Create(configFilePath)
-	if err != nil {
-		return fmt.Errorf("建立 config.json 失敗: %w", err)
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "    ") // 格式化 JSON，方便閱讀
-	return encoder.Encode(info)
 }
 
 // RunChildProcess 執行子行程的邏輯

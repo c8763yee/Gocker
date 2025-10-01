@@ -35,6 +35,7 @@ type ContainerInfo struct {
 	CreatedAt  time.Time `json:"createdAt"`
 	Image      string    `json:"image"`
 	MountPoint string    `json:"mountPoint"`
+	FinishedAt time.Time `json:"finishedAt,omitempty"`
 }
 
 type Info struct {

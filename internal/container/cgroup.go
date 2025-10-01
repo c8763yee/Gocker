@@ -50,11 +50,9 @@ func SetupCgroup(limits types.ContainerLimits, pid int) (string, error) {
 func CleanupCgroup(cgroupPath string) error {
 	logrus.Infof("TODO: Cleaning up cgroup at %s", cgroupPath)
 	// 這裡未來要加入刪除 cgroup 目錄的邏輯
-	return nil // 暫時回傳 nil 讓編譯通過
+	return nil
 }
 
-// setResourceLimits 根據傳入的 limits 物件設定資源限制
-// 1. 函式簽章被修改，以接收具體的 limits
 func setResourceLimits(cgroupPath string, limits types.ContainerLimits) error {
 	// 設定 CPU 限制
 	if limits.CPULimit > 0 {
@@ -63,9 +61,8 @@ func setResourceLimits(cgroupPath string, limits types.ContainerLimits) error {
 		cpuLimitString := fmt.Sprintf("%d %d", cpuQuota, cpuPeriod)
 		cpuMaxPath := filepath.Join(cgroupPath, "cpu.max")
 		if err := os.WriteFile(cpuMaxPath, []byte(cpuLimitString), 0644); err != nil {
-			logrus.Warnf("設定 CPU 限制失敗: %v", err)
-			// 根據策略，這裡可以選擇回傳錯誤或僅顯示警告
-			// return fmt.Errorf("寫入 cpu.max 失敗: %w", err)
+			// logrus.Warnf("設定 CPU 限制失敗: %v", err)
+			return fmt.Errorf("寫入 cpu.max 失敗: %w", err)
 		}
 	}
 
@@ -74,8 +71,8 @@ func setResourceLimits(cgroupPath string, limits types.ContainerLimits) error {
 		memMaxPath := filepath.Join(cgroupPath, "memory.max")
 		memLimitString := strconv.Itoa(limits.MemoryLimit)
 		if err := os.WriteFile(memMaxPath, []byte(memLimitString), 0644); err != nil {
-			logrus.Warnf("設定記憶體限制失敗: %v", err)
-			// return fmt.Errorf("寫入 memory.max 失敗: %w", err)
+			// logrus.Warnf("設定記憶體限制失敗: %v", err)
+			return fmt.Errorf("寫入 memory.max 失敗: %w", err)
 		}
 	}
 
@@ -84,8 +81,8 @@ func setResourceLimits(cgroupPath string, limits types.ContainerLimits) error {
 		pidsMaxPath := filepath.Join(cgroupPath, "pids.max")
 		pidsLimitString := strconv.Itoa(limits.PidsLimit)
 		if err := os.WriteFile(pidsMaxPath, []byte(pidsLimitString), 0644); err != nil {
-			logrus.Warnf("設定 PID 限制失敗: %v", err)
-			// return fmt.Errorf("寫入 pids.max 失敗: %w", err)
+			// logrus.Warnf("設定 PID 限制失敗: %v", err)
+			return fmt.Errorf("寫入 pids.max 失敗: %w", err)
 		}
 	}
 
