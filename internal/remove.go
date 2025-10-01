@@ -40,7 +40,6 @@ func RemoveContainer(containerID string) error {
 	if info.MountPoint != "" {
 		logrus.Infof("正在解除掛載 %s", info.MountPoint)
 		if err := syscall.Unmount(info.MountPoint, 0); err != nil {
-			// 即使解除掛載失敗，也只記錄警告，繼續嘗試刪除
 			logrus.Warnf("解除掛載 %s 失敗: %v", info.MountPoint, err)
 		}
 	}

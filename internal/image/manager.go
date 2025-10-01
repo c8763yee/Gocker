@@ -32,7 +32,7 @@ func NewManager() *Manager {
 }
 
 // Pull 拉取映像
-func (m *Manager) Pull(imageName string) error {
+func (m *Manager) PullImage(imageName string) error {
 	// 使用 crane 拉取映像
 	img, err := crane.Pull(imageName)
 	if err != nil {

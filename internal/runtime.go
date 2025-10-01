@@ -19,7 +19,9 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// RunContainer 負責完整的父行程邏輯：建立容器元數據、設定資源並啟動子行程
+/*
+RunContainer 負責完整的父行程邏輯：建立容器元數據、設定資源並啟動子行程
+*/
 func RunContainer(req *types.RunRequest) error {
 	// 1. 產生一個隨機的容器 ID
 	randBytes := make([]byte, 12)
@@ -51,7 +53,7 @@ func RunContainer(req *types.RunRequest) error {
 		ID:         containerID,
 		Name:       req.ContainerName,
 		Command:    req.ContainerCommand,
-		Status:     types.Created, // 初始狀態為 Created
+		Status:     types.Created,
 		CreatedAt:  time.Now(),
 		Image:      fmt.Sprintf("%s:%s", req.ImageName, req.ImageTag),
 		MountPoint: filepath.Join(containerDir, "rootfs"), // 預先定義掛載點路徑
@@ -75,7 +77,7 @@ func RunContainer(req *types.RunRequest) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.ExtraFiles = []*os.File{readPipe} // 將管道的讀取端傳遞給子行程
+	cmd.ExtraFiles = []*os.File{readPipe}
 
 	// 6. 使用 goroutine 將完整的請求資訊寫入管道
 	go func() {
@@ -99,12 +101,13 @@ func RunContainer(req *types.RunRequest) error {
 	if err := container.WriteContainerInfo(containerDir, info); err != nil {
 		log.Warnf("更新容器狀態為 Running 失敗: %v", err)
 	}
+	manager := container.NewManager()
 
 	// 9. 從外部為子行程設定資源
 	log.Info("父行程: 設定 cgroup 資源限制...")
-	cgroupPath, err := container.SetupCgroup(req.ContainerLimits, childPid)
+	cgroupPath, err := manager.SetupCgroup(req.ContainerLimits, childPid)
 	if err != nil {
-		// 如果設定失敗，最好是殺死子行程並回傳錯誤，以避免產生失控的容器
+		// 如果設定失敗，殺死子行程並回傳錯誤
 		_ = cmd.Process.Kill()
 		return fmt.Errorf("設定 cgroup 失敗: %w", err)
 	}
@@ -128,10 +131,9 @@ func RunContainer(req *types.RunRequest) error {
 	if err := container.WriteContainerInfo(containerDir, info); err != nil {
 		log.Warnf("更新容器狀態為 Stopped 失敗: %v", err)
 	}
-
-	// 注意：清理工作（unmount, 刪除 cgroup, 刪除 veth）被移至 'gocker rm' 指令中，
-	// 這樣我們才能在容器停止後，依然可以透過 'gocker ps' 查看到它。
-	_ = container.CleanupCgroup(cgroupPath) // 這裡的清理可以根據策略決定是否保留
+	// 12. 清理 cgroup
+	log.Info("父行程: 清理 cgroup...")
+	_ = manager.CleanupCgroup(cgroupPath)
 
 	return nil
 }
@@ -187,5 +189,5 @@ func InitContainer() error {
 		return fmt.Errorf("子行程: exec 失敗: %w", err)
 	}
 
-	return nil // 正常情況下不會執行到這裡
+	return nil
 }

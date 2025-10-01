@@ -2,27 +2,28 @@
 package cmd
 
 import (
-	"fmt"
-	"os"
-
-	// "github.com/spf13/cobra"
-
 	"gocker/internal/image"
+
+	"github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
 )
 
-func PullImage(args []string) {
-	if len(args) < 1 {
-		fmt.Println("用法: gocker pull <image_name>")
-		os.Exit(1)
-	}
+var pullCommand = &cobra.Command{
+	Use:   "pull [IMAGE_NAME]",
+	Short: "Pull an image from a remote repository",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		imageName := args[0]
+		logrus.Infof("正在拉取映像: %s", imageName)
+		manager := image.NewManager()
+		if err := manager.PullImage(imageName); err != nil {
+			logrus.Fatalf("拉取映像 %s 失敗: %v", imageName, err)
+		}
 
-	imageName := args[0]
-	fmt.Printf("正在拉取映像: %s\n", imageName)
+		logrus.Infof("成功拉取並儲存映像: %s", imageName)
+	},
+}
 
-	manager := image.NewManager()
-	if err := manager.Pull(imageName); err != nil {
-		panic(fmt.Sprintf("拉取映像 '%s' 失敗: %v", imageName, err))
-	}
-
-	fmt.Printf("成功拉取映像: %s\n", imageName)
+func init() {
+	rootCmd.AddCommand(pullCommand)
 }
