@@ -17,12 +17,12 @@ func (m *Manager) SetupCgroup(limits types.ContainerLimits, pid int) (string, er
 	parentCgroupPath := filepath.Join(config.CgroupRoot, config.CgroupName)
 	log := logrus.WithField("parentCgroup", parentCgroupPath)
 
-	// 步驟 1: 確保父 cgroup 目錄存在
+	// 1. 確保父 cgroup 目錄存在
 	if err := os.MkdirAll(parentCgroupPath, 0755); err != nil {
 		return "", fmt.Errorf("建立父 cgroup 目錄 %s 失敗: %w", parentCgroupPath, err)
 	}
 
-	// 步驟 2: 啟用必要的 cgroup 控制器
+	// 2. 啟用必要的 cgroup 控制器
 	controllers := "+cpu +memory +pids"
 	controlFilePath := filepath.Join(parentCgroupPath, "cgroup.subtree_control")
 	log.Infof("正在啟用 cgroup 控制器: %s", controllers)
@@ -30,7 +30,7 @@ func (m *Manager) SetupCgroup(limits types.ContainerLimits, pid int) (string, er
 		log.Warnf("啟用 cgroup 控制器可能失敗 (可忽略): %v", err)
 	}
 
-	// 步驟 3: 為每個容器建立一個獨立的 cgroup 路徑
+	// 3. 為每個容器建立一個獨立的 cgroup 路徑
 	containerCgroupPath := filepath.Join(parentCgroupPath, strconv.Itoa(pid))
 	log = log.WithField("cgroupPath", containerCgroupPath)
 
@@ -39,15 +39,15 @@ func (m *Manager) SetupCgroup(limits types.ContainerLimits, pid int) (string, er
 		return "", fmt.Errorf("建立 cgroup 目錄 %s 失敗: %w", containerCgroupPath, err)
 	}
 
-	// 步驟 4: 設定具體的資源限制
+	// 4. 設定具體的資源限制
 	log.Info("正在設定容器的資源限制...")
 	if err := m.setResourceLimits(containerCgroupPath, limits); err != nil {
-		// 如果設定失敗，清理掉已建立的目錄
+		// 如果設定失敗，清理已建立的目錄
 		_ = m.CleanupCgroup(containerCgroupPath)
 		return "", fmt.Errorf("設定資源限制失敗: %w", err)
 	}
 
-	// 步驟 5: 將子行程 PID 加入 cgroup
+	// 5. 將子行程 PID 加入 cgroup
 	procsPath := filepath.Join(containerCgroupPath, "cgroup.procs")
 	log.Infof("正在將 PID %d 加入 cgroup...", pid)
 	if err := os.WriteFile(procsPath, []byte(strconv.Itoa(pid)), 0644); err != nil {
@@ -56,7 +56,7 @@ func (m *Manager) SetupCgroup(limits types.ContainerLimits, pid int) (string, er
 	}
 
 	log.Info("Cgroup 設定成功")
-	// 步驟 6: 回傳建立的 cgroup 路徑，以便後續清理
+	// 6. 回傳建立的 cgroup 路徑，以便後續清理
 	return containerCgroupPath, nil
 }
 

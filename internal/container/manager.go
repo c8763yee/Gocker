@@ -4,19 +4,22 @@ package container
 import (
 	"encoding/json"
 	"fmt"
-	"gocker/internal/config"
-	"gocker/internal/types"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/sirupsen/logrus"
+
+	"gocker/internal/config"
+	"gocker/internal/types"
+	"gocker/pkg"
 )
 
 // Manager 負責所有容器的生命週期管理
 type Manager struct {
-	StoragePath string // 依賴的設定，例如容器儲存路徑
+	StoragePath string // 依賴的設定，容器儲存路徑
 }
 
 // NewManager 建立一個新的容器管理器
@@ -47,11 +50,7 @@ func (m *Manager) StopContainer(identifier string) error {
 	log.Infof("正在停止容器...")
 
 	// 3. 發送 SIGTERM 信號
-	// syscall.Kill 可以發送任何信號給指定的 PID
-	// SIGTERM 是一個標準的、溫和的終止信號
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
-		// 如果行程已經不存在，也會回傳錯誤，但我們的目標是停止它，所以可以視為成功
-		// "no such process" 是一個可以接受的錯誤
 		if err.Error() != "no such process" {
 			return fmt.Errorf("向容器行程 %d 發送 SIGTERM 信號失敗: %w", pid, err)
 		}
@@ -105,7 +104,99 @@ func findContainerInfo(identifier string) (*types.ContainerInfo, error) {
 	return nil, fmt.Errorf("找不到容器: %s", identifier)
 }
 
-// writeContainerInfo 是一個輔助函式，用來將容器資訊寫回檔案
+func (m *Manager) Start(identifier string) error {
+	// 1. 查找容器並獲取其資訊
+	info, err := findContainerInfo(identifier)
+	if err != nil {
+		return err
+	}
+
+	// 2. 檢查容器狀態
+	if info.Status == types.Running {
+		return fmt.Errorf("容器 %s 已經在運行中", identifier)
+	}
+	if info.Status != types.Stopped && info.Status != types.Created {
+		return fmt.Errorf("無法啟動狀態為 %s 的容器", info.Status)
+	}
+
+	// 3. 準備重新啟動子行程
+	log := logrus.WithField("containerID", info.ID)
+
+	// 準備管道用於通信
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("建立管道失敗: %w", err)
+	}
+	defer readPipe.Close()
+
+	// 準備命令
+	selfPath, _ := os.Executable()
+	cmd := exec.Command(selfPath, "init")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET,
+	}
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.ExtraFiles = []*os.File{readPipe}
+
+	go func() {
+		defer writePipe.Close()
+		imageName, imageTag := pkg.Parse(info.Image)
+
+		req := &types.RunRequest{
+			ImageName:        imageName,
+			ImageTag:         imageTag,
+			ContainerCommand: info.Command,
+			ContainerLimits:  info.Limits,
+		}
+
+		encoder := json.NewEncoder(writePipe)
+		if err := encoder.Encode(req); err != nil {
+			log.Errorf("向管道寫入配置失敗: %v", err)
+		}
+	}()
+
+	// 4. 啟動子行程
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("啟動子行程失敗: %w", err)
+	}
+	newPid := cmd.Process.Pid
+	log.Infof("容器已重新啟動，新的 PID 為 %d", newPid)
+
+	// 5. 更新 config.json 狀態
+	info.PID = newPid
+	info.Status = types.Running
+	info.FinishedAt = time.Time{} // 清除上次的結束時間
+	containerDir := filepath.Join(m.StoragePath, info.ID)
+	if err := WriteContainerInfo(containerDir, info); err != nil {
+		log.Warnf("更新容器狀態為 Running 失敗: %v", err)
+	}
+
+	// 6. 設定資源限制
+	cgroupPath, err := m.SetupCgroup(types.ContainerLimits{}, newPid)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("設定 cgroup 失敗: %w", err)
+	}
+
+	// 7. 等待容器結束
+	_ = cmd.Wait()
+
+	// 8. 容器再次停止後，更新最終狀態
+	log.Info("容器已退出")
+	info.PID = 0
+	info.Status = types.Stopped
+	info.FinishedAt = time.Now()
+	_ = WriteContainerInfo(containerDir, info)
+
+	// 9. 清理資源
+	_ = m.CleanupCgroup(cgroupPath)
+
+	return nil
+}
+
+// writeContainerInfo 將容器資訊寫回檔案
 func WriteContainerInfo(containerDir string, info *types.ContainerInfo) error {
 	configFilePath := filepath.Join(containerDir, "config.json")
 	file, err := os.Create(configFilePath)
@@ -115,6 +206,6 @@ func WriteContainerInfo(containerDir string, info *types.ContainerInfo) error {
 	defer file.Close()
 
 	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "    ") // 格式化 JSON，方便閱讀
+	encoder.SetIndent("", "    ") // 格式化 JSON
 	return encoder.Encode(info)
 }

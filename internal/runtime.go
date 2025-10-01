@@ -8,21 +8,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
 	"gocker/internal/config"
 	"gocker/internal/container"
-	"gocker/internal/network"
+
+	// "gocker/internal/network"
 	"gocker/internal/types"
 
 	"github.com/sirupsen/logrus"
 )
 
-/*
-RunContainer 負責完整的父行程邏輯：建立容器元數據、設定資源並啟動子行程
-*/
+// RunContainer 負責完整的父行程邏輯：建立容器元數據、設定資源並啟動子行程
 func RunContainer(req *types.RunRequest) error {
+	rootCgroupProcs := "/sys/fs/cgroup/cgroup.procs"
+	if err := os.WriteFile(rootCgroupProcs, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		return fmt.Errorf("無法將父行程移至 cgroup root: %w", err)
+	}
 	// 1. 產生一個隨機的容器 ID
 	randBytes := make([]byte, 12)
 	if _, err := rand.Read(randBytes); err != nil {
@@ -57,6 +61,7 @@ func RunContainer(req *types.RunRequest) error {
 		CreatedAt:  time.Now(),
 		Image:      fmt.Sprintf("%s:%s", req.ImageName, req.ImageTag),
 		MountPoint: filepath.Join(containerDir, "rootfs"), // 預先定義掛載點路徑
+		Limits:     req.ContainerLimits,
 	}
 	if err := container.WriteContainerInfo(containerDir, info); err != nil {
 		return fmt.Errorf("寫入容器設定檔失敗: %w", err)
@@ -112,11 +117,11 @@ func RunContainer(req *types.RunRequest) error {
 		return fmt.Errorf("設定 cgroup 失敗: %w", err)
 	}
 
-	log.Info("父行程: 設定容器網路...")
-	if err := network.SetupVeth(childPid); err != nil {
-		_ = cmd.Process.Kill()
-		return fmt.Errorf("設定網路失敗: %w", err)
-	}
+	// log.Info("父行程: 設定容器網路...")
+	// if err := network.SetupVeth(childPid); err != nil {
+	// 	_ = cmd.Process.Kill()
+	// 	return fmt.Errorf("設定網路失敗: %w", err)
+	// }
 
 	// 10. 等待容器行程結束
 	log.Info("父行程: 等待容器行程結束...")
@@ -162,7 +167,7 @@ func InitContainer() error {
 	}
 
 	// 3. 設定根檔案系統 (Rootfs)
-	if err := container.SetupRootfs(req.ImageName, req.ImageTag); err != nil {
+	if err := container.SetupRootfs(req.MountPoint, req.ImageName, req.ImageTag); err != nil {
 		return fmt.Errorf("子行程: 設定 rootfs 失敗: %w", err)
 	}
 	log.Info("子行程: Rootfs 掛載成功")
@@ -172,10 +177,10 @@ func InitContainer() error {
 	syscall.Mount("sysfs", "/sys", "sysfs", 0, "")
 
 	// 5. 在容器內部設定網路
-	if err := network.ConfigureContainerNetwork(); err != nil {
-		return fmt.Errorf("子行程: 設定容器網路失敗: %w", err)
-	}
-	log.Info("子行程: 容器內網路設定完成")
+	// if err := network.ConfigureContainerNetwork(); err != nil {
+	// 	return fmt.Errorf("子行程: 設定容器網路失敗: %w", err)
+	// }
+	// log.Info("子行程: 容器內網路設定完成")
 
 	// 6. 使用 syscall.Exec 執行使用者指定的命令
 	cmdPath, err := exec.LookPath(req.ContainerCommand)

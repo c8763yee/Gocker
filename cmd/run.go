@@ -2,14 +2,13 @@
 package cmd
 
 import (
-	"strings"
-
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"gocker/internal"
 	"gocker/internal/config"
 	"gocker/internal/types"
+	"gocker/pkg"
 )
 
 var request types.RunRequest
@@ -20,7 +19,7 @@ var runCommand = &cobra.Command{
 	Long:  "Run a command in a new container with specified image and command.",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		imageName, imageTag := input_parse(args[0])
+		imageName, imageTag := pkg.Parse(args[0])
 		logrus.Infof("Image: %s, Tag: %s", imageName, imageTag)
 
 		request.ImageName = imageName
@@ -37,17 +36,6 @@ var runCommand = &cobra.Command{
 			logrus.Fatalf("Failed to run container: %v", err)
 		}
 	},
-}
-
-func input_parse(input string) (string, string) {
-	s := strings.Split(input, ":")
-	if len(s) == 1 {
-		return s[0], "latest"
-	}
-	if len(s) == 2 {
-		return s[0], s[1]
-	}
-	return "", ""
 }
 
 func init() {
