@@ -2,47 +2,139 @@
 package container
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"gocker/internal/config"
+	"gocker/internal/types"
+
+	"github.com/sirupsen/logrus"
 )
 
+// SetupRootfs 準備容器的根檔案系統，包括掛載 OverlayFS 和執行 pivot_root
+// 參數 mountPoint 是容器最終的掛載點路徑
+func SetupRootfs(mountPoint string, imageName, imageTag string) error {
+	log := logrus.WithFields(logrus.Fields{
+		"image":      fmt.Sprintf("%s:%s", imageName, imageTag),
+		"mountPoint": mountPoint,
+	})
+	log.Info("正在設定容器 rootfs...")
+
+	// 1. 尋找基礎映像的 rootfs 路徑 (lowerdir)
+	imageRootfsPath, err := findImageRootfsPath(imageName, imageTag)
+	if err != nil {
+		return fmt.Errorf("找不到基礎映像 '%s:%s': %w", imageName, imageTag, err)
+	}
+	log.Infof("找到基礎映像 rootfs (lowerdir): %s", imageRootfsPath)
+
+	/*
+	 * 	2. 建立 OverlayFS 所需的目錄
+	 *  -  upperdir: 存放容器內檔案變更 (寫入層)
+	 *  -  workdir: OverlayFS 的工作目錄
+	 */
+	containerBasePath := filepath.Dir(mountPoint)
+	upperdir := filepath.Join(containerBasePath, "upper")
+	workdir := filepath.Join(containerBasePath, "work")
+
+	if err := os.MkdirAll(mountPoint, 0755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(upperdir, 0755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(workdir, 0755); err != nil {
+		return err
+	}
+
+	// 3. 組合 OverlayFS 的掛載選項
+	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", imageRootfsPath, upperdir, workdir)
+
+	// 4. 掛載 OverlayFS
+	log.Infof("正在掛載 OverlayFS, opts: %s", opts)
+	if err := syscall.Mount("overlay", mountPoint, "overlay", 0, opts); err != nil {
+		return fmt.Errorf("掛載 OverlayFS 失敗: %w", err)
+	}
+
+	// 5. 執行 pivot_root 將根目錄切換到 mountPoint
+	if err := PivotRoot(mountPoint); err != nil {
+		return fmt.Errorf("pivot_root 執行失敗: %w", err)
+	}
+
+	// 6. 在新的根目錄下掛載虛擬檔案系統
+	log.Info("正在掛載 /proc, /sys, /dev...")
+	if err := syscall.Mount("proc", "/proc", "proc", 0, ""); err != nil {
+		return fmt.Errorf("掛載 /proc 失敗: %w", err)
+	}
+	if err := syscall.Mount("sysfs", "/sys", "sysfs", 0, ""); err != nil {
+		return fmt.Errorf("掛載 /sys 失敗: %w", err)
+	}
+	if err := syscall.Mount("tmpfs", "/dev", "tmpfs", syscall.MS_NOSUID|syscall.MS_STRICTATIME, "mode=755"); err != nil {
+		return fmt.Errorf("掛載 /dev 失敗: %w", err)
+	}
+
+	return nil
+}
+
 // PivotRoot 切換根目錄
-func PivotRoot(newRoot string) {
-	// 將根目錄的掛載傳播類型設為 private
+func PivotRoot(newRoot string) error {
+	// 確保當前的 / 掛載傳播類型為 private，避免影響主機
 	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
-		panic(fmt.Sprintf("將根掛載設為 private 失敗: %v", err))
+		return fmt.Errorf("將根掛載設為 private 失敗: %w", err)
 	}
 
-	putold := filepath.Join(newRoot, ".old_root")
-
-	// 確保 newRoot 是掛載點
+	// 為了滿足 pivot_root 的要求，newRoot 必須是一個掛載點
 	if err := syscall.Mount(newRoot, newRoot, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
-		panic(fmt.Sprintf("重新掛載 newRoot 失敗: %v", err))
+		return fmt.Errorf("綁定掛載 newRoot 失敗: %w", err)
 	}
 
-	// 建立 .old_root 目錄
+	// 建立 .old_root 目錄，用來臨時存放舊的根
+	putold := filepath.Join(newRoot, ".old_root")
 	if err := os.MkdirAll(putold, 0700); err != nil {
-		panic(fmt.Sprintf("建立 .old_root 失敗: %v", err))
+		return fmt.Errorf("建立 .old_root 失敗: %w", err)
 	}
 
 	// 執行 pivot_root
 	if err := syscall.PivotRoot(newRoot, putold); err != nil {
-		panic(fmt.Sprintf("pivot_root 失敗: %v", err))
+		return fmt.Errorf("pivot_root 失敗: %w", err)
 	}
 
 	// 切換到新的根目錄
 	if err := os.Chdir("/"); err != nil {
-		panic(fmt.Sprintf("chdir 到 / 失敗: %v", err))
+		return fmt.Errorf("chdir 到 / 失敗: %w", err)
 	}
 
-	// 卸載並移除舊的根目錄
+	// 卸載並移除舊的根目錄 (現在的路徑是相對於 newRoot)
 	if err := syscall.Unmount("/.old_root", syscall.MNT_DETACH); err != nil {
-		panic(fmt.Sprintf("卸載 .old_root 失敗: %v", err))
+		return fmt.Errorf("卸載 .old_root 失敗: %w", err)
+	}
+	if err := os.RemoveAll("/.old_root"); err != nil {
+		logrus.Warnf("移除 .old_root 失敗: %v", err)
+	}
+	return nil
+}
+
+// findImageRootfsPath 透過 manifest 檔案尋找映像的 rootfs 路徑
+func findImageRootfsPath(imageName, imageTag string) (string, error) {
+	manifestPath := filepath.Join(config.ImagesDir, "manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return "", fmt.Errorf("讀取映像 manifest %s 失敗: %w", manifestPath, err)
 	}
 
-	if err := os.RemoveAll("/.old_root"); err != nil {
-		fmt.Printf("警告: 移除 .old_root 失敗: %v\n", err)
+	var manifests []types.ImageManifest
+	if err := json.Unmarshal(data, &manifests); err != nil {
+		return "", fmt.Errorf("解析 manifest.json 失敗: %w", err)
 	}
+
+	searchName := fmt.Sprintf("%s:%s", imageName, imageTag)
+	for _, m := range manifests {
+		if m.RepoTag == searchName {
+			return filepath.Join(config.ImagesDir, m.ImageID, "rootfs"), nil
+		}
+	}
+
+	return "", fmt.Errorf("在 manifest 中找不到映像 '%s'", searchName)
 }

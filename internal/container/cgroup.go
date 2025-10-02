@@ -1,59 +1,110 @@
-// internal/container/cgroup.go
 package container
 
 import (
 	"fmt"
-	"gocker/internal/config"
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"gocker/internal/config"
+	"gocker/internal/types"
+
+	"github.com/sirupsen/logrus"
 )
 
-// SetupCgroup 設定 Cgroup 資源限制
-func SetupCgroup() {
-	gockerCgroupPath := filepath.Join(config.CgroupRoot, config.CgroupName)
+// SetupCgroup 由父行程呼叫，為指定的 PID 建立一個獨立的 cgroup 並設定資源限制
+func (m *Manager) SetupCgroup(limits types.ContainerLimits, pid int) (string, error) {
+	parentCgroupPath := filepath.Join(config.CgroupRoot, config.CgroupName)
+	log := logrus.WithField("parentCgroup", parentCgroupPath)
 
-	// 建立 gocker cgroup 目錄
-	if err := os.MkdirAll(gockerCgroupPath, 0755); err != nil {
-		fmt.Printf("警告: 建立 cgroup 目錄失敗: %v\n", err)
-		return
+	// 1. 確保父 cgroup 目錄存在
+	if err := os.MkdirAll(parentCgroupPath, 0755); err != nil {
+		return "", fmt.Errorf("建立父 cgroup 目錄 %s 失敗: %w", parentCgroupPath, err)
 	}
 
-	// 啟用控制器
-	if err := enableControllers(); err != nil {
-		fmt.Printf("警告: 啟用 cgroup 控制器失敗: %v\n", err)
+	// 2. 啟用必要的 cgroup 控制器
+	controllers := "+cpu +memory +pids"
+	controlFilePath := filepath.Join(parentCgroupPath, "cgroup.subtree_control")
+	log.Infof("正在啟用 cgroup 控制器: %s", controllers)
+	if err := os.WriteFile(controlFilePath, []byte(controllers), 0644); err != nil {
+		log.Warnf("啟用 cgroup 控制器可能失敗 (可忽略): %v", err)
 	}
 
-	// 設定資源限制
-	setResourceLimits(gockerCgroupPath)
+	// 3. 為每個容器建立一個獨立的 cgroup 路徑
+	containerCgroupPath := filepath.Join(parentCgroupPath, strconv.Itoa(pid))
+	log = log.WithField("cgroupPath", containerCgroupPath)
 
-	// 將目前程序加入 cgroup
-	pid := os.Getpid()
-	procsPath := filepath.Join(gockerCgroupPath, "cgroup.procs")
+	log.Info("正在建立容器的 cgroup...")
+	if err := os.MkdirAll(containerCgroupPath, 0755); err != nil {
+		return "", fmt.Errorf("建立 cgroup 目錄 %s 失敗: %w", containerCgroupPath, err)
+	}
+
+	// 4. 設定具體的資源限制
+	log.Info("正在設定容器的資源限制...")
+	if err := m.setResourceLimits(containerCgroupPath, limits); err != nil {
+		// 如果設定失敗，清理已建立的目錄
+		_ = m.CleanupCgroup(containerCgroupPath)
+		return "", fmt.Errorf("設定資源限制失敗: %w", err)
+	}
+
+	// 5. 將子行程 PID 加入 cgroup
+	procsPath := filepath.Join(containerCgroupPath, "cgroup.procs")
+	log.Infof("正在將 PID %d 加入 cgroup...", pid)
 	if err := os.WriteFile(procsPath, []byte(strconv.Itoa(pid)), 0644); err != nil {
-		panic(fmt.Sprintf("將 PID 加入 cgroup 失敗: %v", err))
+		_ = m.CleanupCgroup(containerCgroupPath)
+		return "", fmt.Errorf("將 PID 加入 cgroup.procs 失敗: %w", err)
 	}
 
-	fmt.Printf("子行程 PID %d 已加入 gocker cgroup\n", pid)
+	log.Info("Cgroup 設定成功")
+	// 6. 回傳建立的 cgroup 路徑，以便後續清理
+	return containerCgroupPath, nil
 }
 
-// enableControllers 啟用 cgroup 控制器
-func enableControllers() error {
-	controllerPath := filepath.Join(config.CgroupRoot, "cgroup.subtree_control")
-	return os.WriteFile(controllerPath, []byte("+cpu +memory"), 0644)
+// CleanupCgroup 負責在容器停止後，清理其對應的 cgroup 目錄
+func (m *Manager) CleanupCgroup(cgroupPath string) error {
+	log := logrus.WithField("cgroupPath", cgroupPath)
+	log.Info("正在清理 cgroup...")
+
+	// 遞迴刪除目錄。
+	if err := os.RemoveAll(cgroupPath); err != nil {
+		return fmt.Errorf("移除 cgroup 目錄 %s 失敗: %w", cgroupPath, err)
+	}
+
+	log.Info("成功清理 cgroup")
+	return nil
 }
 
-// setResourceLimits 設定資源限制
-func setResourceLimits(cgroupPath string) {
-	// 設定 CPU 限制
-	cpuMaxPath := filepath.Join(cgroupPath, "cpu.max")
-	if err := os.WriteFile(cpuMaxPath, []byte(config.CPULimit), 0644); err != nil {
-		fmt.Printf("警告: 設定 CPU 限制失敗: %v\n", err)
+// setResourceLimits 用來寫入 cgroup 限制檔案
+func (m *Manager) setResourceLimits(cgroupPath string, limits types.ContainerLimits) error {
+	// 設定 CPU 限制 (cpu.max)
+	if limits.CPULimit > 0 {
+		// CPULimit: 0.5 -> 50000 100000 (50% quota in a 100ms period)
+		cpuQuota := limits.CPULimit * 100000
+		cpuPeriod := 100000
+		cpuLimitString := fmt.Sprintf("%d %d", cpuQuota, cpuPeriod)
+		cpuMaxPath := filepath.Join(cgroupPath, "cpu.max")
+		if err := os.WriteFile(cpuMaxPath, []byte(cpuLimitString), 0644); err != nil {
+			return fmt.Errorf("寫入 cpu.max 失敗: %w", err)
+		}
 	}
 
-	// 設定記憶體限制
-	memMaxPath := filepath.Join(cgroupPath, "memory.max")
-	if err := os.WriteFile(memMaxPath, []byte(config.MemoryLimit), 0644); err != nil {
-		fmt.Printf("警告: 設定記憶體限制失敗: %v\n", err)
+	// 設定記憶體限制 (memory.max)
+	if limits.MemoryLimit > 0 {
+		memMaxPath := filepath.Join(cgroupPath, "memory.max")
+		memLimitString := strconv.Itoa(limits.MemoryLimit)
+		if err := os.WriteFile(memMaxPath, []byte(memLimitString), 0644); err != nil {
+			return fmt.Errorf("寫入 memory.max 失敗: %w", err)
+		}
 	}
+
+	// 設定 PID 限制 (pids.max)
+	if limits.PidsLimit > 0 {
+		pidsMaxPath := filepath.Join(cgroupPath, "pids.max")
+		pidsLimitString := strconv.Itoa(limits.PidsLimit)
+		if err := os.WriteFile(pidsMaxPath, []byte(pidsLimitString), 0644); err != nil {
+			return fmt.Errorf("寫入 pids.max 失敗: %w", err)
+		}
+	}
+
+	return nil
 }

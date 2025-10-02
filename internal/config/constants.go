@@ -3,9 +3,10 @@ package config
 
 const (
 	// 儲存路徑
-	GockerStorage = "/var/lib/gocker"
-	ImagesDir     = GockerStorage + "/images"
-	ContainersDir = GockerStorage + "/containers"
+	GockerStorage        = "/var/lib/gocker"
+	ImagesDir            = GockerStorage + "/images"
+	ContainersDir        = GockerStorage + "/containers"
+	ContainerStoragePath = "/var/lib/gocker/containers"
 
 	// 網路設定
 	BridgeName  = "gocker0"
@@ -25,6 +26,10 @@ const (
 	CgroupName = "gocker"
 
 	// 資源限制 (可在未來改為可配置)
-	CPULimit    = "50000 100000" // 50% CPU
-	MemoryLimit = "100M"         // 100MB Memory
+	DefaultCPULimit    = 1                // 1 core CPU
+	DefaultMemoryLimit = 100 * 102 * 1024 // 100MB Memory
+	DefaultPidsLimit   = 100              // 100 processes
+
+	// 日誌設定
+	DefaultLogLevel = "debug"
 )
