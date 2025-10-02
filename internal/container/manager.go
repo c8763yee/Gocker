@@ -19,7 +19,7 @@ import (
 
 // Manager 負責所有容器的生命週期管理
 type Manager struct {
-	StoragePath string // 依賴的設定，容器儲存路徑
+	StoragePath string
 }
 
 // NewManager 建立一個新的容器管理器
@@ -63,12 +63,73 @@ func (m *Manager) StopContainer(identifier string) error {
 	info.FinishedAt = time.Now()
 
 	containerDir := filepath.Join(config.ContainerStoragePath, info.ID)
-	if err := WriteContainerInfo(containerDir, info); err != nil {
+	if err := pkg.WriteContainerInfo(containerDir, info); err != nil {
 		return fmt.Errorf("更新容器狀態為 Stopped 失敗: %w", err)
 	}
 
 	log.Infof("容器 %s 已成功停止", identifier)
 	return nil
+}
+
+func (m *Manager) StopAllContainers() error {
+	logrus.Info("正在停止所有運行中的容器...")
+
+	containers, err := m.List()
+	if err != nil {
+		return fmt.Errorf("獲取容器列表失敗: %v", err)
+	}
+
+	stoppedCount := 0
+	for _, c := range containers {
+		if c.Status == types.Running {
+			logrus.Infof("正在停止容器 %s (%s)", c.Name, c.ID[:12])
+
+			if err := m.StopContainer(c.ID); err != nil {
+				logrus.Warnf("停止容器 %s 失敗: %v", c.ID, err)
+			} else {
+				stoppedCount++
+			}
+		}
+	}
+
+	if stoppedCount == 0 {
+		fmt.Println("沒有正在運行的容器。")
+	} else {
+		fmt.Printf("成功停止 %d 個容器。\n", stoppedCount)
+	}
+
+	return nil
+}
+
+func (m *Manager) List() ([]*types.ContainerInfo, error) {
+	files, err := os.ReadDir(m.StoragePath)
+	if err != nil {
+		return nil, fmt.Errorf("讀取容器儲存目錄 %s 失敗: %w", m.StoragePath, err)
+	}
+
+	var containers []*types.ContainerInfo
+	for _, file := range files {
+		if !file.IsDir() {
+			continue
+		}
+		containerID := file.Name()
+		configPath := filepath.Join(m.StoragePath, containerID, "config.json")
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			logrus.Warnf("讀取容器設定檔 %s 失敗: %v", configPath, err)
+			continue
+		}
+
+		var info types.ContainerInfo
+		if err := json.Unmarshal(data, &info); err != nil {
+			logrus.Warnf("解析容器設定檔 %s 失敗: %v", configPath, err)
+			continue
+		}
+		containers = append(containers, &info)
+	}
+
+	return containers, nil
 }
 func findContainerInfo(identifier string) (*types.ContainerInfo, error) {
 	files, err := os.ReadDir(config.ContainerStoragePath)
@@ -122,14 +183,14 @@ func (m *Manager) Start(identifier string) error {
 	// 3. 準備重新啟動子行程
 	log := logrus.WithField("containerID", info.ID)
 
-	// 準備管道用於通信
+	// 準備pipe
 	readPipe, writePipe, err := os.Pipe()
 	if err != nil {
 		return fmt.Errorf("建立管道失敗: %w", err)
 	}
 	defer readPipe.Close()
 
-	// 準備命令
+	// 準備command
 	selfPath, _ := os.Executable()
 	cmd := exec.Command(selfPath, "init")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -148,6 +209,7 @@ func (m *Manager) Start(identifier string) error {
 			ImageName:        imageName,
 			ImageTag:         imageTag,
 			ContainerCommand: info.Command,
+			MountPoint:       info.MountPoint,
 			ContainerLimits:  info.Limits,
 		}
 
@@ -169,7 +231,7 @@ func (m *Manager) Start(identifier string) error {
 	info.Status = types.Running
 	info.FinishedAt = time.Time{} // 清除上次的結束時間
 	containerDir := filepath.Join(m.StoragePath, info.ID)
-	if err := WriteContainerInfo(containerDir, info); err != nil {
+	if err := pkg.WriteContainerInfo(containerDir, info); err != nil {
 		log.Warnf("更新容器狀態為 Running 失敗: %v", err)
 	}
 
@@ -188,24 +250,10 @@ func (m *Manager) Start(identifier string) error {
 	info.PID = 0
 	info.Status = types.Stopped
 	info.FinishedAt = time.Now()
-	_ = WriteContainerInfo(containerDir, info)
+	_ = pkg.WriteContainerInfo(containerDir, info)
 
 	// 9. 清理資源
 	_ = m.CleanupCgroup(cgroupPath)
 
 	return nil
-}
-
-// writeContainerInfo 將容器資訊寫回檔案
-func WriteContainerInfo(containerDir string, info *types.ContainerInfo) error {
-	configFilePath := filepath.Join(containerDir, "config.json")
-	file, err := os.Create(configFilePath)
-	if err != nil {
-		return fmt.Errorf("建立 config.json 失敗: %w", err)
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "    ") // 格式化 JSON
-	return encoder.Encode(info)
 }

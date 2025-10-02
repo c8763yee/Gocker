@@ -31,9 +31,9 @@ func SetupRootfs(mountPoint string, imageName, imageTag string) error {
 	log.Infof("找到基礎映像 rootfs (lowerdir): %s", imageRootfsPath)
 
 	/*
-	 * 	  建立 OverlayFS 所需的目錄
-	 *  - upperdir: 存放容器內檔案變更 (寫入層)
-	 *  - workdir: OverlayFS 的工作目錄
+	 * 	2. 建立 OverlayFS 所需的目錄
+	 *  -  upperdir: 存放容器內檔案變更 (寫入層)
+	 *  -  workdir: OverlayFS 的工作目錄
 	 */
 	containerBasePath := filepath.Dir(mountPoint)
 	upperdir := filepath.Join(containerBasePath, "upper")

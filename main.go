@@ -16,7 +16,6 @@ func main() {
 		if err := internal.InitContainer(); err != nil {
 			logrus.Fatalf("容器初始化失敗: %v", err)
 		}
-		// 子行程的生命週期到此為止
 		return
 	}
 	cmd.Execute()
