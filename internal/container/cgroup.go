@@ -8,6 +8,7 @@ import (
 
 	"gocker/internal/config"
 	"gocker/internal/types"
+	"gocker/pkg"
 
 	"github.com/sirupsen/logrus"
 )
@@ -71,6 +72,59 @@ func (m *Manager) CleanupCgroup(cgroupPath string) error {
 	}
 
 	log.Info("成功清理 cgroup")
+	return nil
+}
+
+func (m *Manager) AdjustResourceLimits(identifier string, limits types.ContainerLimits) error {
+	info, err := findContainerInfo(identifier)
+	if err != nil {
+		return fmt.Errorf("找不到容器資訊: %w", err)
+	}
+
+	if info.Status != types.Running {
+		return fmt.Errorf("容器 %s 不在運行狀態，目前狀態為: %s", identifier, info.Status)
+	}
+
+	pid := info.PID
+	if pid <= 0 {
+		return fmt.Errorf("無效的 PID %d", pid)
+	} else {
+		logrus.Infof("調整容器 %s (PID %d) 的資源限制", identifier, pid)
+	}
+
+	// Keep original limits if new limits are invalid
+	originalLimits := info.Limits
+	if limits.CPULimit == config.InvalidLimit {
+		limits.CPULimit = originalLimits.CPULimit
+	}
+	if limits.MemoryLimit == config.InvalidLimit {
+		limits.MemoryLimit = originalLimits.MemoryLimit
+	}
+	if limits.PidsLimit == config.InvalidLimit {
+		limits.PidsLimit = originalLimits.PidsLimit
+	}
+
+	parentCgroupPath := filepath.Join(config.CgroupRoot, config.CgroupName)
+	containerCgroupPath := filepath.Join(parentCgroupPath, strconv.Itoa(pid))
+	log := logrus.WithField("cgroupPath", containerCgroupPath)
+
+	if _, err := os.Stat(containerCgroupPath); os.IsNotExist(err) {
+		return fmt.Errorf("cgroup 目錄 %s 不存在: %w", containerCgroupPath, err)
+	}
+
+	log.Info("正在調整容器的資源限制...")
+	if err := m.setResourceLimits(containerCgroupPath, limits); err != nil {
+		return fmt.Errorf("調整資源限制失敗: %w", err)
+	}
+
+	log.Info("成功調整容器的資源限制")
+	// 更新 config.json 中的限制資訊
+	info.Limits = limits
+	containerDir := filepath.Join(config.ContainerStoragePath, info.ID)
+	if err := pkg.WriteContainerInfo(containerDir, info); err != nil {
+		return fmt.Errorf("更新容器設定檔失敗: %w", err)
+	}
+	log.Info("已更新容器的限制資訊至配置檔")
 	return nil
 }
 
