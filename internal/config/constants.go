@@ -29,6 +29,7 @@ const (
 	DefaultCPULimit    = 1                // 1 core CPU
 	DefaultMemoryLimit = 100 * 102 * 1024 // 100MB Memory
 	DefaultPidsLimit   = 100              // 100 processes
+	InvalidLimit       = -1
 
 	// 日誌設定
 	DefaultLogLevel = "debug"
