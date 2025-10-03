@@ -16,7 +16,7 @@ import (
 	"gocker/internal/container"
 	"gocker/pkg"
 
-	// "gocker/internal/network"
+	"gocker/internal/network"
 	"gocker/internal/types"
 
 	"github.com/sirupsen/logrus"
@@ -112,18 +112,18 @@ func RunContainer(req *types.RunRequest) error {
 
 	// 9. 從外部為子行程設定資源
 	log.Info("父行程: 設定 cgroup 資源限制...")
-	cgroupPath, err := manager.SetupCgroup(req.ContainerLimits, childPid)
+	cgroupPath, err := manager.SetupCgroup(req.ContainerLimits, childPid, containerID)
 	if err != nil {
 		// 如果設定失敗，殺死子行程並回傳錯誤
 		_ = cmd.Process.Kill()
 		return fmt.Errorf("設定 cgroup 失敗: %w", err)
 	}
 
-	// log.Info("父行程: 設定容器網路...")
-	// if err := network.SetupVeth(childPid); err != nil {
-	// 	_ = cmd.Process.Kill()
-	// 	return fmt.Errorf("設定網路失敗: %w", err)
-	// }
+	log.Info("父行程: 設定容器網路...")
+	if err := network.SetupVeth(childPid); err != nil {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("設定網路失敗: %w", err)
+	}
 
 	// 10. 等待容器行程結束
 	log.Info("父行程: 等待容器行程結束...")
@@ -179,10 +179,10 @@ func InitContainer() error {
 	syscall.Mount("sysfs", "/sys", "sysfs", 0, "")
 
 	// 5. 在容器內部設定網路
-	// if err := network.ConfigureContainerNetwork(); err != nil {
-	// 	return fmt.Errorf("子行程: 設定容器網路失敗: %w", err)
-	// }
-	// log.Info("子行程: 容器內網路設定完成")
+	if err := network.ConfigureContainerNetwork(); err != nil {
+		return fmt.Errorf("子行程: 設定容器網路失敗: %w", err)
+	}
+	log.Info("子行程: 容器內網路設定完成")
 
 	// 6. 使用 syscall.Exec 執行使用者指定的命令
 	cmdPath, err := exec.LookPath(req.ContainerCommand)

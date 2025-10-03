@@ -13,7 +13,7 @@ import (
 )
 
 // SetupCgroup 由父行程呼叫，為指定的 PID 建立一個獨立的 cgroup 並設定資源限制
-func (m *Manager) SetupCgroup(limits types.ContainerLimits, pid int) (string, error) {
+func (m *Manager) SetupCgroup(limits types.ContainerLimits, pid int, containerID string) (string, error) {
 	parentCgroupPath := filepath.Join(config.CgroupRoot, config.CgroupName)
 	log := logrus.WithField("parentCgroup", parentCgroupPath)
 
@@ -31,8 +31,8 @@ func (m *Manager) SetupCgroup(limits types.ContainerLimits, pid int) (string, er
 	}
 
 	// 3. 為每個容器建立一個獨立的 cgroup 路徑
-	containerCgroupPath := filepath.Join(parentCgroupPath, strconv.Itoa(pid))
-	log = log.WithField("cgroupPath", containerCgroupPath)
+	containerCgroupPath := filepath.Join(parentCgroupPath, containerID)
+	log = logrus.WithField("cgroupPath", containerCgroupPath)
 
 	log.Info("正在建立容器的 cgroup...")
 	if err := os.MkdirAll(containerCgroupPath, 0755); err != nil {
@@ -65,7 +65,7 @@ func (m *Manager) CleanupCgroup(cgroupPath string) error {
 	log := logrus.WithField("cgroupPath", cgroupPath)
 	log.Info("正在清理 cgroup...")
 
-	// 遞迴刪除目錄。
+	// 遞迴刪除目錄
 	if err := os.RemoveAll(cgroupPath); err != nil {
 		return fmt.Errorf("移除 cgroup 目錄 %s 失敗: %w", cgroupPath, err)
 	}

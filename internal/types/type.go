@@ -10,6 +10,7 @@ type RunRequest struct {
 	ContainerID      string
 	ContainerArgs    []string
 	MountPoint       string
+	VethPeerName     string
 	ContainerLimits
 }
 
@@ -39,13 +40,6 @@ type ContainerInfo struct {
 	FinishedAt time.Time       `json:"finishedAt,omitempty"`
 	Limits     ContainerLimits `json:"limits,omitempty"`
 }
-
-// type Info struct {
-// 	Repository string
-// 	Tag        string
-// 	ID         string
-// 	Size       string
-// }
 
 // ImageManifest Image 的結構
 type ImageManifest struct {

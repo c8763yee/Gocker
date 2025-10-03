@@ -20,9 +20,9 @@ func SetupContainerNetwork(childPid int) error {
 		return fmt.Errorf("建立 veth pair 失敗: %v", err)
 	}
 
-	// 連接主機端 veth 到網橋
+	// 連接主機端 veth 到Bridge
 	if err := connectVethToBridge(vethName); err != nil {
-		return fmt.Errorf("連接 veth 到網橋失敗: %v", err)
+		return fmt.Errorf("連接 veth 到Bridge失敗: %v", err)
 	}
 
 	// 將容器端 veth 移入容器的網路 namespace
@@ -43,12 +43,12 @@ func createVethPair(vethName, peerName string) error {
 	return netlink.LinkAdd(veth)
 }
 
-// connectVethToBridge 將主機端 veth 連接到網橋
+// connectVethToBridge 將主機端 veth 連接到Bridge
 func connectVethToBridge(vethName string) error {
-	// 獲取網橋
+	// 獲取Bridge
 	bridge, err := netlink.LinkByName(config.BridgeName)
 	if err != nil {
-		return fmt.Errorf("找不到網橋: %v", err)
+		return fmt.Errorf("找不到Bridge: %v", err)
 	}
 
 	// 獲取主機端 veth
@@ -57,7 +57,7 @@ func connectVethToBridge(vethName string) error {
 		return fmt.Errorf("找不到主機端 veth: %v", err)
 	}
 
-	// 將 veth 連接到網橋
+	// 將 veth 連接到Bridge
 	if err := netlink.LinkSetMaster(hostVeth, bridge); err != nil {
 		return fmt.Errorf("設定 veth master 失敗: %v", err)
 	}
@@ -81,7 +81,10 @@ func moveVethToContainer(peerName string, childPid int) error {
 }
 
 func SetupVeth(pid int) error {
-	logrus.Infof("TODO: Setting up veth for PID %d", pid)
-	// 這裡未來要加入建立 veth、設定 bridge、將一端移入 network namespace 的邏輯
-	return nil // 暫時回傳 nil 讓編譯通過
+	logrus.Infof("Setting up veth for container with PID %d", pid)
+	if err := SetupContainerNetwork(pid); err != nil {
+		return fmt.Errorf("failed to setup container network: %v", err)
+	}
+	logrus.Infof("Successfully set up veth for container with PID %d", pid)
+	return nil
 }
