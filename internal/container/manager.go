@@ -236,7 +236,7 @@ func (m *Manager) Start(identifier string) error {
 	}
 
 	// 6. 設定資源限制
-	cgroupPath, err := m.SetupCgroup(types.ContainerLimits{}, newPid)
+	cgroupPath, err := m.SetupCgroup(types.ContainerLimits{}, newPid, info.ID)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		return fmt.Errorf("設定 cgroup 失敗: %w", err)

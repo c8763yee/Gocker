@@ -16,7 +16,7 @@ import (
 	"gocker/internal/container"
 	"gocker/pkg"
 
-	// "gocker/internal/network"
+	"gocker/internal/network"
 	"gocker/internal/types"
 
 	"github.com/sirupsen/logrus"
@@ -28,6 +28,7 @@ func RunContainer(req *types.RunRequest) error {
 	if err := os.WriteFile(rootCgroupProcs, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
 		return fmt.Errorf("無法將父行程移至 cgroup root: %w", err)
 	}
+
 	// 1. 產生一個隨機的容器 ID
 	randBytes := make([]byte, 12)
 	if _, err := rand.Read(randBytes); err != nil {
@@ -54,6 +55,7 @@ func RunContainer(req *types.RunRequest) error {
 	}
 	mountPoint := filepath.Join(containerDir, "rootfs")
 	req.MountPoint = mountPoint
+
 	// 3. 建立並寫入初始的 config.json
 	info := &types.ContainerInfo{
 		ID:         containerID,
@@ -86,44 +88,46 @@ func RunContainer(req *types.RunRequest) error {
 	cmd.Stderr = os.Stderr
 	cmd.ExtraFiles = []*os.File{readPipe}
 
-	// 6. 使用 goroutine 將完整的請求資訊寫入管道
-	go func() {
-		defer writePipe.Close()
-		encoder := json.NewEncoder(writePipe)
-		if err := encoder.Encode(req); err != nil {
-			log.Errorf("父行程: 向管道寫入配置失敗: %v", err)
-		}
-	}()
-
-	// 7. 啟動子行程
+	// 6. 啟動子行程
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("啟動子行程失敗: %w", err)
 	}
 	childPid := cmd.Process.Pid
 	log.Infof("父行程: 子行程已啟動，PID 為 %d", childPid)
 
-	// 8. 更新 config.json，寫入 PID 並將狀態改為 Running
+	// 7. 父行程為子行程設定外部環境
+	// 7.1 設定 cgroup
+	manager := container.NewManager()
+	log.Info("父行程: 設定 cgroup 資源限制...")
+	cgroupPath, err := manager.SetupCgroup(req.ContainerLimits, childPid, containerID)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("設定 cgroup 失敗: %w", err)
+	}
+
+	// 7.2 設定網路，並得到 peerName
+	log.Info("父行程: 設定容器網路...")
+	peerName, err := network.SetupVeth(childPid)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("設定網路失敗: %w", err)
+	}
+	req.VethPeerName = peerName
+
+	// 8. 將 req 物件寫入管道，通知子行程繼續
+	defer writePipe.Close()
+	encoder := json.NewEncoder(writePipe)
+	if err := encoder.Encode(req); err != nil {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("父行程: 向管道寫入配置失敗: %v", err)
+	}
+
+	// 9. 更新 config.json，寫入 PID 並將狀態改為 Running
 	info.PID = childPid
 	info.Status = types.Running
 	if err := pkg.WriteContainerInfo(containerDir, info); err != nil {
 		log.Warnf("更新容器狀態為 Running 失敗: %v", err)
 	}
-	manager := container.NewManager()
-
-	// 9. 從外部為子行程設定資源
-	log.Info("父行程: 設定 cgroup 資源限制...")
-	cgroupPath, err := manager.SetupCgroup(req.ContainerLimits, childPid)
-	if err != nil {
-		// 如果設定失敗，殺死子行程並回傳錯誤
-		_ = cmd.Process.Kill()
-		return fmt.Errorf("設定 cgroup 失敗: %w", err)
-	}
-
-	// log.Info("父行程: 設定容器網路...")
-	// if err := network.SetupVeth(childPid); err != nil {
-	// 	_ = cmd.Process.Kill()
-	// 	return fmt.Errorf("設定網路失敗: %w", err)
-	// }
 
 	// 10. 等待容器行程結束
 	log.Info("父行程: 等待容器行程結束...")
@@ -174,17 +178,22 @@ func InitContainer() error {
 	}
 	log.Info("子行程: Rootfs 掛載成功")
 
-	// 4. 掛載必要的核心虛擬檔案系統
+	// 4. 設定 DNS
+	if err := network.SetupDNS(); err != nil {
+		return fmt.Errorf("子行程: 設定 DNS 失敗: %w", err)
+	}
+
+	// 5. 掛載必要的核心虛擬檔案系統
 	syscall.Mount("proc", "/proc", "proc", 0, "")
 	syscall.Mount("sysfs", "/sys", "sysfs", 0, "")
 
-	// 5. 在容器內部設定網路
-	// if err := network.ConfigureContainerNetwork(); err != nil {
-	// 	return fmt.Errorf("子行程: 設定容器網路失敗: %w", err)
-	// }
-	// log.Info("子行程: 容器內網路設定完成")
+	// 6. 在容器內部設定網路
+	if err := network.ConfigureContainerNetwork(req.VethPeerName); err != nil {
+		return fmt.Errorf("子行程: 設定容器網路失敗: %w", err)
+	}
+	log.Info("子行程: 容器內網路設定完成")
 
-	// 6. 使用 syscall.Exec 執行使用者指定的命令
+	// 7. 使用 syscall.Exec 執行使用者指定的命令
 	cmdPath, err := exec.LookPath(req.ContainerCommand)
 	if err != nil {
 		return fmt.Errorf("子行程: 找不到命令 '%s': %w", req.ContainerCommand, err)

@@ -4,7 +4,6 @@ package network
 import (
 	"fmt"
 	"net"
-	"time"
 
 	"gocker/internal/config"
 
@@ -13,24 +12,54 @@ import (
 )
 
 // ConfigureContainerNetwork 設定容器內的網路
-func ConfigureContainerNetwork() error {
-	// 等待 veth peer 設定完成
-	time.Sleep(200 * time.Millisecond)
-
-	// 設定網路介面
-	if err := setupNetworkInterface(); err != nil {
-		return fmt.Errorf("設定網路介面失敗: %w", err)
+func ConfigureContainerNetwork(peerName string) error {
+	// 1. 找到容器內的 veth peer
+	peer, err := netlink.LinkByName(peerName)
+	if err != nil {
+		return fmt.Errorf("在容器內找不到 veth peer '%s': %v", peerName, err)
 	}
 
-	// 啟動 loopback 介面
-	if err := setupLoopback(); err != nil {
-		return fmt.Errorf("設定 loopback 介面失敗: %w", err)
+	// 2. 將 veth peer 重新命名為 eth0，這是容器內網卡的標準名稱
+	if err := netlink.LinkSetName(peer, "eth0"); err != nil {
+		return fmt.Errorf("重新命名 veth peer 為 eth0 失敗: %v", err)
 	}
 
-	logrus.Info("容器內網路設定完成")
+	// 3. 為 eth0 設定 IP 位址
+	addr, err := netlink.ParseAddr(config.ContainerIP)
+	if err != nil {
+		return fmt.Errorf("解析容器 IP 位址 '%s' 失敗: %v", config.ContainerIP, err)
+	}
+	if err := netlink.AddrAdd(peer, addr); err != nil {
+		return fmt.Errorf("為 eth0 設定 IP 失敗: %v", err)
+	}
+
+	// 4. 啟動 eth0 網卡
+	if err := netlink.LinkSetUp(peer); err != nil {
+		return fmt.Errorf("啟動 eth0 失敗: %v", err)
+	}
+
+	// 5. 設定預設路由，將所有流量指向網橋的 IP (Gateway)
+	gatewayIP := net.ParseIP(config.GatewayIP)
+	if gatewayIP == nil {
+		return fmt.Errorf("解析閘道 IP '%s' 失敗", config.GatewayIP)
+	}
+	route := &netlink.Route{
+		Scope: netlink.SCOPE_UNIVERSE,
+		Gw:    gatewayIP,
+	}
+	if err := netlink.RouteAdd(route); err != nil {
+		return fmt.Errorf("設定預設路由失敗: %v", err)
+	}
+
+	// (可選但推薦) 啟動 lo 本地環回介面
+	lo, _ := netlink.LinkByName("lo")
+	_ = netlink.LinkSetUp(lo)
+
+	logrus.Infof("容器內網路設定完成，IP: %s", config.ContainerIP)
 	return nil
 }
 
+/*
 // setupNetworkInterface 設定容器的網路介面
 func setupNetworkInterface() error {
 	// 找到可用的網路介面 (除了 lo)
@@ -113,3 +142,5 @@ func setupLoopback() error {
 
 	return netlink.LinkSetUp(lo)
 }
+
+*/

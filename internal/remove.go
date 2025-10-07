@@ -44,13 +44,20 @@ func RemoveContainer(containerID string) error {
 		}
 	}
 
-	// 5. 刪除整個容器目錄
+	// 5. 刪除cgroup
+	cgroupPath := filepath.Join(config.CgroupRoot, config.CgroupName, info.ID)
+	logrus.Infof("正在清理 Cgroup %s", cgroupPath)
+
+	if err := os.RemoveAll(cgroupPath); err != nil {
+		return fmt.Errorf("移除 cgroup 目錄 %s 失敗: %w", cgroupPath, err)
+	}
+	logrus.Info("成功清理 cgroup")
+
+	// 6. 刪除整個容器目錄
 	logrus.Infof("正在刪除容器目錄 %s", containerDir)
 	if err := os.RemoveAll(containerDir); err != nil {
 		return fmt.Errorf("刪除容器目錄 %s 失敗: %w", containerDir, err)
 	}
-
-	// TODO: 在這裡加入清理 Cgroup 和網路的邏輯
 
 	logrus.Infof("成功刪除容器 %s", containerID)
 	return nil
