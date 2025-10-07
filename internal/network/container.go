@@ -4,7 +4,6 @@ package network
 import (
 	"fmt"
 	"net"
-	"os"
 
 	"gocker/internal/config"
 
@@ -13,11 +12,8 @@ import (
 )
 
 // ConfigureContainerNetwork 設定容器內的網路
-func ConfigureContainerNetwork() error {
-	// 1. 根據約定的命名規則找到被移入容器的 veth peer
-	pid := os.Getpid()
-	peerName := fmt.Sprintf("peer-%d", pid)
-
+func ConfigureContainerNetwork(peerName string) error {
+	// 1. 找到容器內的 veth peer
 	peer, err := netlink.LinkByName(peerName)
 	if err != nil {
 		return fmt.Errorf("在容器內找不到 veth peer '%s': %v", peerName, err)

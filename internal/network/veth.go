@@ -11,26 +11,26 @@ import (
 )
 
 // SetupContainerNetwork 為容器設定網路
-func SetupContainerNetwork(childPid int) error {
+func SetupContainerNetwork(childPid int) (string, error) {
 	vethName := fmt.Sprintf("veth-%d", childPid)
 	peerName := fmt.Sprintf("peer-%d", childPid)
 
 	// 建立 veth pair
 	if err := createVethPair(vethName, peerName); err != nil {
-		return fmt.Errorf("建立 veth pair 失敗: %v", err)
+		return "", fmt.Errorf("建立 veth pair 失敗: %v", err)
 	}
 
 	// 連接主機端 veth 到Bridge
 	if err := connectVethToBridge(vethName); err != nil {
-		return fmt.Errorf("連接 veth 到Bridge失敗: %v", err)
+		return "", fmt.Errorf("連接 veth 到Bridge失敗: %v", err)
 	}
 
 	// 將容器端 veth 移入容器的網路 namespace
 	if err := moveVethToContainer(peerName, childPid); err != nil {
-		return fmt.Errorf("移動 veth 到容器失敗: %v", err)
+		return "", fmt.Errorf("移動 veth 到容器失敗: %v", err)
 	}
 
-	return nil
+	return peerName, nil
 }
 
 // createVethPair 建立 veth pair
@@ -80,11 +80,12 @@ func moveVethToContainer(peerName string, childPid int) error {
 	return netlink.LinkSetNsPid(peer, childPid)
 }
 
-func SetupVeth(pid int) error {
+func SetupVeth(pid int) (string, error) {
 	logrus.Infof("Setting up veth for container with PID %d", pid)
-	if err := SetupContainerNetwork(pid); err != nil {
-		return fmt.Errorf("failed to setup container network: %v", err)
+	peerName, err := SetupContainerNetwork(pid)
+	if err != nil {
+		return "", fmt.Errorf("failed to setup container network: %v", err)
 	}
 	logrus.Infof("Successfully set up veth for container with PID %d", pid)
-	return nil
+	return peerName, nil
 }
