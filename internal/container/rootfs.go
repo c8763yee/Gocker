@@ -3,9 +3,11 @@ package container
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"gocker/internal/config"
@@ -55,7 +57,14 @@ func SetupRootfs(mountPoint string, imageName, imageTag string) error {
 	// 4. 掛載 OverlayFS
 	log.Infof("正在掛載 OverlayFS, opts: %s", opts)
 	if err := syscall.Mount("overlay", mountPoint, "overlay", 0, opts); err != nil {
-		return fmt.Errorf("掛載 OverlayFS 失敗: %w", err)
+
+		// if mount error is "Device or resource busy", check if the mount point is already mounted
+		// and fstype is overlay
+		if errors.Is(err, syscall.EBUSY) && checkFSType(mountPoint, "overlay") {
+			log.Infof("掛載點 %s 已經掛載 OverlayFS，跳過掛載步驟", mountPoint)
+		} else {
+			return fmt.Errorf("掛載 OverlayFS 失敗: %w", err)
+		}
 	}
 
 	// 5. 執行 pivot_root 將根目錄切換到 mountPoint
@@ -137,4 +146,32 @@ func findImageRootfsPath(imageName, imageTag string) (string, error) {
 	}
 
 	return "", fmt.Errorf("在 manifest 中找不到映像 '%s'", searchName)
+}
+
+/*
+檢查mountPoint是否為指定的fstype
+
+/proc/mounts 格式
+
+* device mountPoint fstype options dump pass
+*/
+func checkFSType(mountPoint, fstype string) bool {
+	data, err := os.ReadFile("/proc/mounts")
+	if err != nil {
+		logrus.Warnf("讀取 /proc/mounts 失敗: %v", err)
+		return false
+	}
+
+	for line := range strings.SplitSeq(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && fields[1] == mountPoint {
+			if fields[2] != fstype {
+				logrus.Warnf("掛載點 %s 的 fstype 為 %s, 不是預期的 %s", mountPoint, fields[2], fstype)
+				return false
+			}
+			return true
+		}
+	}
+	logrus.Warnf("找不到掛載點 %s", mountPoint)
+	return false
 }
