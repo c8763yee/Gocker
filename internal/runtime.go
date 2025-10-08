@@ -183,17 +183,13 @@ func InitContainer() error {
 		return fmt.Errorf("子行程: 設定 DNS 失敗: %w", err)
 	}
 
-	// 5. 掛載必要的核心虛擬檔案系統
-	syscall.Mount("proc", "/proc", "proc", 0, "")
-	syscall.Mount("sysfs", "/sys", "sysfs", 0, "")
-
-	// 6. 在容器內部設定網路
+	// 5. 在容器內部設定網路
 	if err := network.ConfigureContainerNetwork(req.VethPeerName); err != nil {
 		return fmt.Errorf("子行程: 設定容器網路失敗: %w", err)
 	}
 	log.Info("子行程: 容器內網路設定完成")
 
-	// 7. 使用 syscall.Exec 執行使用者指定的命令
+	// 6. 使用 syscall.Exec 執行使用者指定的命令
 	cmdPath, err := exec.LookPath(req.ContainerCommand)
 	if err != nil {
 		return fmt.Errorf("子行程: 找不到命令 '%s': %w", req.ContainerCommand, err)

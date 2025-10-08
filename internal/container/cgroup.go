@@ -13,6 +13,23 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+func cgroupPath(info *types.ContainerInfo) (string, string, error) {
+    parent := filepath.Join(config.CgroupRoot, config.CgroupName)
+    // 1) Preferred: container ID directory
+    idPath := filepath.Join(parent, info.ID)
+    if st, err := os.Stat(idPath); err == nil && st.IsDir() {
+        return idPath, "id", nil
+    }
+    // 2) Legacy fallback: PID directory (deprecated)
+    if info.PID > 0 {
+        legacy := filepath.Join(parent, fmt.Sprintf("%d", info.PID))
+        if st, err := os.Stat(legacy); err == nil && st.IsDir() {
+            return legacy, "pid", nil
+        }
+    }
+    return "", "", fmt.Errorf("cgroup path not found for container %s", info.ID)
+}
+
 // SetupCgroup 由父行程呼叫，為指定的 PID 建立一個獨立的 cgroup 並設定資源限制
 func (m *Manager) SetupCgroup(limits types.ContainerLimits, pid int, containerID string) (string, error) {
 	parentCgroupPath := filepath.Join(config.CgroupRoot, config.CgroupName)
@@ -85,12 +102,7 @@ func (m *Manager) AdjustResourceLimits(identifier string, limits types.Container
 		return fmt.Errorf("容器 %s 不在運行狀態，目前狀態為: %s", identifier, info.Status)
 	}
 
-	pid := info.PID
-	if pid <= 0 {
-		return fmt.Errorf("無效的 PID %d", pid)
-	} else {
-		logrus.Infof("調整容器 %s (PID %d) 的資源限制", identifier, pid)
-	}
+	logrus.Infof("調整容器 %s (PID %d) 的資源限制", identifier, info.PID)
 
 	// Keep original limits if new limits are invalid
 	originalLimits := info.Limits
@@ -104,18 +116,22 @@ func (m *Manager) AdjustResourceLimits(identifier string, limits types.Container
 		limits.PidsLimit = originalLimits.PidsLimit
 	}
 
-	parentCgroupPath := filepath.Join(config.CgroupRoot, config.CgroupName)
-	containerCgroupPath := filepath.Join(parentCgroupPath, strconv.Itoa(pid))
-	log := logrus.WithField("cgroupPath", containerCgroupPath)
-
-	if _, err := os.Stat(containerCgroupPath); os.IsNotExist(err) {
-		return fmt.Errorf("cgroup 目錄 %s 不存在: %w", containerCgroupPath, err)
+	containerCgroupPath, mode, err := cgroupPath(info)
+	if err != nil {
+		return err
 	}
-
+	log := logrus.WithFields(logrus.Fields{
+		"cgroupPath": containerCgroupPath,
+		"resolver":   mode, // "id" 或 "pid"
+	})
+	if mode == "pid" {
+		log.Warn("Using legacy PID-based cgroup path; But lets use container ID based path next time, mate!")
+	}
+	// we don't need to check if the path exists, cgroupPath already did that
 	log.Info("正在調整容器的資源限制...")
-	if err := m.setResourceLimits(containerCgroupPath, limits); err != nil {
-		return fmt.Errorf("調整資源限制失敗: %w", err)
-	}
+    if err := m.setResourceLimits(containerCgroupPath, limits); err != nil {
+        return fmt.Errorf("調整資源限制失敗: %w", err)
+    }
 
 	log.Info("成功調整容器的資源限制")
 	// 更新 config.json 中的限制資訊
