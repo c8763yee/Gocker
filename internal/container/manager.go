@@ -13,6 +13,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"gocker/internal/config"
+	"gocker/internal/network"
 	"gocker/internal/types"
 	"gocker/pkg"
 )
@@ -188,7 +189,7 @@ func (m *Manager) Start(identifier string) error {
 	if err != nil {
 		return fmt.Errorf("建立管道失敗: %w", err)
 	}
-	defer readPipe.Close()
+	defer writePipe.Close()
 
 	// 準備command
 	selfPath, _ := os.Executable()
@@ -201,58 +202,69 @@ func (m *Manager) Start(identifier string) error {
 	cmd.Stderr = os.Stderr
 	cmd.ExtraFiles = []*os.File{readPipe}
 
-	go func() {
-		defer writePipe.Close()
-		imageName, imageTag := pkg.Parse(info.Image)
-
-		req := &types.RunRequest{
-			ImageName:        imageName,
-			ImageTag:         imageTag,
-			ContainerCommand: info.Command,
-			MountPoint:       info.MountPoint,
-			ContainerLimits:  info.Limits,
-		}
-
-		encoder := json.NewEncoder(writePipe)
-		if err := encoder.Encode(req); err != nil {
-			log.Errorf("向管道寫入配置失敗: %v", err)
-		}
-	}()
-
 	// 4. 啟動子行程
 	if err := cmd.Start(); err != nil {
+		readPipe.Close()
 		return fmt.Errorf("啟動子行程失敗: %w", err)
 	}
+	readPipe.Close()
+
 	newPid := cmd.Process.Pid
 	log.Infof("容器已重新啟動，新的 PID 為 %d", newPid)
 
-	// 5. 更新 config.json 狀態
+	// 5. 設定網路
+	peerName, err := network.SetupVeth(newPid)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("設定容器網路失敗: %w", err)
+	}
+
+	// 6. 同步地將設定資訊寫入 pipe
+	imageName, imageTag := pkg.Parse(info.Image)
+	req := &types.RunRequest{
+		ImageName:        imageName,
+		ImageTag:         imageTag,
+		ContainerCommand: info.Command,
+		MountPoint:       info.MountPoint,
+		ContainerLimits:  info.Limits,
+		VethPeerName:     peerName,
+	}
+
+	encoder := json.NewEncoder(writePipe)
+	if err := encoder.Encode(req); err != nil {
+		_ = cmd.Process.Kill()
+		log.Errorf("向管道寫入配置失敗: %v", err)
+		return fmt.Errorf("向子行程傳遞設定失敗: %w", err)
+	}
+	writePipe.Close()
+
+	// 7. 更新 config.json 狀態
 	info.PID = newPid
 	info.Status = types.Running
-	info.FinishedAt = time.Time{} // 清除上次的結束時間
+	info.FinishedAt = time.Time{}
 	containerDir := filepath.Join(m.StoragePath, info.ID)
 	if err := pkg.WriteContainerInfo(containerDir, info); err != nil {
 		log.Warnf("更新容器狀態為 Running 失敗: %v", err)
 	}
 
-	// 6. 設定資源限制
-	cgroupPath, err := m.SetupCgroup(types.ContainerLimits{}, newPid, info.ID)
+	// 8. 設定資源限制
+	cgroupPath, err := m.SetupCgroup(info.Limits, newPid, info.ID)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		return fmt.Errorf("設定 cgroup 失敗: %w", err)
 	}
 
-	// 7. 等待容器結束
+	// 9. 等待容器結束
 	_ = cmd.Wait()
 
-	// 8. 容器再次停止後，更新最終狀態
+	// 10. 容器再次停止後，更新最終狀態
 	log.Info("容器已退出")
 	info.PID = 0
 	info.Status = types.Stopped
 	info.FinishedAt = time.Now()
 	_ = pkg.WriteContainerInfo(containerDir, info)
 
-	// 9. 清理資源
+	// 11. 清理資源
 	_ = m.CleanupCgroup(cgroupPath)
 
 	return nil
