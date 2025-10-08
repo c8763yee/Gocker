@@ -7,6 +7,7 @@ const (
 	ImagesDir            = GockerStorage + "/images"
 	ContainersDir        = GockerStorage + "/containers"
 	ContainerStoragePath = "/var/lib/gocker/containers"
+	ManifestPath         = ImagesDir + "/manifest.json"
 
 	// 網路設定
 	BridgeName  = "gocker0"
