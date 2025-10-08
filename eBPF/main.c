@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include "sched_monitor.h"
 #include <errno.h>
+#include <dirent.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -10,7 +11,7 @@
 #include <unistd.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
-#include <string.h>
+#include <limits.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 
@@ -19,9 +20,8 @@
 static volatile sig_atomic_t exiting = 0;
 static void on_sigint(int signo) { (void)signo; exiting = 1; }
 
-struct filter_ctx {
-    __u64 target_cgid;
-};
+static const uint64_t runtime_threshold_ns = DEFAULT_RUNTIME_THRESHOLD_NS;
+static const char target_cgroup_root[] = "/sys/fs/cgroup/gocker";
 
 
 static const char *evt_name(uint32_t t)
@@ -38,11 +38,7 @@ static const char *evt_name(uint32_t t)
 static int handle_event(void *ctx, void *data, size_t len)
 {
     const struct evt *e = data;
-    const struct filter_ctx *fctx = ctx;
-    (void)len;
-
-    if (fctx && fctx->target_cgid && e->cgroup_id != fctx->target_cgid)
-        return 0;
+    (void)ctx; (void)len;
 
 
     printf("ts=%llu cpu=%u type=%s pid=%u tgid=%u cgid=%llu aux0=%d aux1=%d aux2=%llu comm=%s\n",
@@ -67,34 +63,27 @@ static int bump_memlock_rlimit(void)
 }
 
 
-static void dump_cgstats(struct sched_monitor_bpf *skel, __u64 target_cgid)
+static void dump_cgstats(struct sched_monitor_bpf *skel)
 {
     int map_fd = bpf_map__fd(skel->maps.cg_stats);
     __u64 key = 0, next_key = 0;
     struct cg_stat_val val;
 
 
-    printf("=== per-cgroup stats ===\n");
-    if (target_cgid) {
-        if (bpf_map_lookup_elem(map_fd, &target_cgid, &val) == 0) {
-            printf("cgid=%llu runtime_ns=%llu ctx_switches=%llu wakeups=%llu migrations=%llu\n",
-                    (unsigned long long)target_cgid,
-                    (unsigned long long)val.runtime_ns,
-                    (unsigned long long)val.ctx_switches,
-                    (unsigned long long)val.wakeups,
-                    (unsigned long long)val.migrations);
-        } else {
-            printf("cgid=%llu not present\n", (unsigned long long)target_cgid);
-        }
-        return;
-    }
-
+    printf("=== per-cgroup stats (runtime >= %lluns) ===\n",
+            (unsigned long long)runtime_threshold_ns);
     int ret = bpf_map_get_next_key(map_fd, NULL, &key);
     while (ret == 0) {
         if (bpf_map_lookup_elem(map_fd, &key, &val) == 0) {
-            printf("cgid=%llu runtime_ns=%llu ctx_switches=%llu wakeups=%llu migrations=%llu\n",
+            if (runtime_threshold_ns && val.runtime_ns < runtime_threshold_ns) {
+                ret = bpf_map_get_next_key(map_fd, &key, &next_key);
+                key = next_key;
+                continue;
+            }
+            printf("cgid=%llu runtime_ns=%llu max_runtime_ns=%llu ctx_switches=%llu wakeups=%llu migrations=%llu\n",
                     (unsigned long long)key,
                     (unsigned long long)val.runtime_ns,
+                    (unsigned long long)val.max_runtime_ns,
                     (unsigned long long)val.ctx_switches,
                     (unsigned long long)val.wakeups,
                     (unsigned long long)val.migrations);
@@ -104,42 +93,79 @@ static void dump_cgstats(struct sched_monitor_bpf *skel, __u64 target_cgid)
     }
 }
 
-static void dump_pidstats(struct sched_monitor_bpf *skel, __u64 target_cgid)
+static int add_allowed_cgroup(int map_fd, __u64 cgid)
 {
-    int map_fd = bpf_map__fd(skel->maps.pid_stats);
-    struct pid_stat_key key, next_key;
-    struct pid_stat_val val;
-
-    printf("=== per-pid stats ===\n");
-
-    int ret = bpf_map_get_next_key(map_fd, NULL, &key);
-    while (ret == 0) {
-        if (key.cgid == target_cgid) {
-            if (bpf_map_lookup_elem(map_fd, &key, &val) == 0) {
-                printf("pid=%u runtime_ns=%llu ctx_switches=%llu wakeups=%llu migrations=%llu\n",
-                        key.pid,
-                        (unsigned long long)val.runtime_ns,
-                        (unsigned long long)val.ctx_switches,
-                        (unsigned long long)val.wakeups,
-                        (unsigned long long)val.migrations);
-            }
-        }
-        ret = bpf_map_get_next_key(map_fd, &key, &next_key);
-        key = next_key;
-    }
+    uint8_t one = 1;
+    if (bpf_map_update_elem(map_fd, &cgid, &one, BPF_ANY) < 0)
+        return -errno;
+    return 0;
 }
 
-static int resolve_cgroup_id(const char *path, __u64 *cgid)
+static int walk_cgroup_tree(int map_fd, const char *path)
 {
     struct stat st;
 
-    if (stat(path, &st) != 0) {
-        fprintf(stderr, "stat(%s) failed: %s\n", path, strerror(errno));
-        return -1;
-    }
+    if (stat(path, &st) < 0)
+        return -errno;
+    if (!S_ISDIR(st.st_mode))
+        return -ENOTDIR;
 
-    *cgid = st.st_ino;
-    return 0;
+    int err = add_allowed_cgroup(map_fd, st.st_ino);
+    if (err)
+        return err;
+
+    DIR *dir = opendir(path);
+    if (!dir)
+        return -errno;
+
+    struct dirent *entry;
+    while (1) {
+        errno = 0;
+        entry = readdir(dir);
+        if (!entry) {
+            if (err == 0 && errno != 0)
+                err = -errno;
+            break;
+        }
+
+        if (entry->d_name[0] == '.' &&
+            (entry->d_name[1] == '\0' ||
+             (entry->d_name[1] == '.' && entry->d_name[2] == '\0')))
+            continue;
+
+        if (entry->d_type != DT_DIR && entry->d_type != DT_UNKNOWN)
+            continue;
+
+        char child_path[PATH_MAX];
+        int len = snprintf(child_path, sizeof(child_path), "%s/%s", path, entry->d_name);
+        if (len < 0 || len >= (int)sizeof(child_path)) {
+            err = -ENAMETOOLONG;
+            break;
+        }
+
+        struct stat child_stat;
+        if (stat(child_path, &child_stat) < 0) {
+            err = -errno;
+            break;
+        }
+        if (!S_ISDIR(child_stat.st_mode))
+            continue;
+
+        err = walk_cgroup_tree(map_fd, child_path);
+        if (err)
+            break;
+    }
+    closedir(dir);
+    return err;
+}
+
+static int populate_allowed_cgroups(struct sched_monitor_bpf *skel, const char *root_path)
+{
+    int map_fd = bpf_map__fd(skel->maps.allowed_cgroups);
+    if (map_fd < 0)
+        return -errno;
+
+    return walk_cgroup_tree(map_fd, root_path);
 }
 
 int main(int argc, char **argv)
@@ -148,17 +174,11 @@ int main(int argc, char **argv)
     struct ring_buffer *rb = NULL;
     struct sched_monitor_bpf *skel = NULL;
     int err;
-    const char *target_cg_path = "/sys/fs/cgroup/user.slice/user-1000.slice";
-    __u64 target_cgid = 0;
-    struct filter_ctx fctx = {0};
 
 
     libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
     libbpf_set_print((libbpf_print_fn_t)NULL); // silence; comment if debugging
 
-
-    if (resolve_cgroup_id(target_cg_path, &target_cgid))
-        return 1;
 
     if ((err = bump_memlock_rlimit())) {
         fprintf(stderr, "setrlimit(RLIMIT_MEMLOCK) failed: %d\n", err);
@@ -166,30 +186,39 @@ int main(int argc, char **argv)
     }
 
 
-    skel = sched_monitor_bpf__open();
+    skel = sched_monitor_bpf__open();  // open .o檔
     if (!skel) {
         fprintf(stderr, "failed to open BPF skeleton\n");
         return 1;
     }
 
 
-    skel->rodata->target_cgid = target_cgid;
+    if (skel->rodata) {
+        skel->rodata->runtime_event_threshold_ns = runtime_threshold_ns;
+        skel->rodata->filter_enabled = 1;
+    }
 
 
-    if ((err = sched_monitor_bpf__load(skel))) {
+    if ((err = sched_monitor_bpf__load(skel))) {  // 載入 BPF program 
         fprintf(stderr, "failed to load and verify BPF programs: %d\n", err);
         goto cleanup;
     }
 
 
-    if ((err = sched_monitor_bpf__attach(skel))) {
+    if ((err = populate_allowed_cgroups(skel, target_cgroup_root))) {
+        fprintf(stderr, "failed to populate cgroup filter from %s: %d\n",
+                target_cgroup_root, err);
+        goto cleanup;
+    }
+
+
+    if ((err = sched_monitor_bpf__attach(skel))) {   // 掛載 tracepoint 
         fprintf(stderr, "failed to attach BPF programs: %d\n", err);
         goto cleanup;
     }
 
 
-    fctx.target_cgid = target_cgid;
-    rb = ring_buffer__new(bpf_map__fd(skel->maps.events_rb), handle_event, &fctx, NULL);
+    rb = ring_buffer__new(bpf_map__fd(skel->maps.events_rb), handle_event, NULL, NULL);
     if (!rb) {
         fprintf(stderr, "failed to create ring buffer\n");
         goto cleanup;
@@ -200,15 +229,13 @@ int main(int argc, char **argv)
     signal(SIGTERM, on_sigint);
 
 
-    printf("filtering to cgroup %s (cgid=%llu)\n",
-            target_cg_path, (unsigned long long)target_cgid);
     printf("running... Ctrl-C to exit.\n");
 
 
     // simple poll loop with periodic stats dump
     uint64_t last_dump_ms = 0;
     while (!exiting) {
-        int ret = ring_buffer__poll(rb, 200 /* ms */);
+        int ret = ring_buffer__poll(rb, 200 /* ms */);   // read event
         if (ret < 0 && ret != -EINTR) {
             fprintf(stderr, "ring_buffer__poll: %d\n", ret);
         break;
@@ -217,8 +244,7 @@ int main(int argc, char **argv)
         clock_gettime(CLOCK_MONOTONIC, &ts);
         uint64_t now_ms = (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec/1000000;
         if (now_ms - last_dump_ms >= 2000) {
-            dump_cgstats(skel, target_cgid);
-            dump_pidstats(skel, target_cgid);
+            dump_cgstats(skel);
             last_dump_ms = now_ms;
         }
     }
@@ -226,6 +252,6 @@ int main(int argc, char **argv)
 
 cleanup:
     ring_buffer__free(rb);
-    sched_monitor_bpf__destroy(skel);
+    sched_monitor_bpf__destroy(skel);  // 清理
     return err != 0;
 }
