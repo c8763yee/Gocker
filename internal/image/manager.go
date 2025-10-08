@@ -174,19 +174,25 @@ func Untar(tarPath, destPath string) error {
 
 // List 列出本地映像
 func (m *Manager) ListImages() ([]string, error) {
-	files, err := os.ReadDir(m.storageDir)
+	// 讀取 manifest 檔案的內容
+	content, err := os.ReadFile(config.ManifestPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
 		return nil, err
 	}
 
+	// 解析 JSON 內容
+	var entries []types.ImageManifest
+	if err := json.Unmarshal(content, &entries); err != nil {
+		return nil, err
+	}
+
+	// 提取並回傳映像名稱列表
 	var images []string
-	for _, file := range files {
-		if !file.IsDir() && strings.HasSuffix(file.Name(), ".tar") {
-			// 移除 .tar 後綴並還原映像名稱
-			imageName := strings.TrimSuffix(file.Name(), ".tar")
-			imageName = strings.Replace(imageName, "_", ":", 1)
-			images = append(images, imageName)
-		}
+	for _, entry := range entries {
+		images = append(images, entry.RepoTag)
 	}
 
 	return images, nil
