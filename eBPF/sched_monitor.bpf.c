@@ -6,9 +6,11 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
-const volatile __u64 runtime_event_threshold_ns = DEFAULT_RUNTIME_THRESHOLD_NS;
-const volatile __u8 filter_enabled;
+// 只紀錄執行時間超過 5ms 的事件
+const volatile __u64 runtime_event_threshold_ns = DEFAULT_RUNTIME_THRESHOLD_NS;  // 觸發事件的時間閾值
+const volatile __u8 filter_enabled;  // cgroup過濾功能的開關
 
+/* allow-list of cgroup IDs we care about */
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __type(key, __u64);
@@ -39,6 +41,8 @@ static __always_inline __u64 get_cgid(void)
     return bpf_get_current_cgroup_id();
 }
 
+
+// 決定目前事件是否屬於被監控的cgroup
 static __always_inline int allow_cgroup(__u64 cgid)
 {
     if (!filter_enabled)
@@ -58,6 +62,7 @@ static __always_inline void emit_event(struct evt *e, enum evt_type type, __u64 
     bpf_get_current_comm(&e->comm, sizeof(e->comm));  // 拷貝當前 task 的 comm（最多 15 字元 + '\0'）
 }
 
+// 找出對應 cgroup 的統計記錄，如沒有則初始化，最後累加 runtime
 static __always_inline void cgstats_add_runtime(__u64 cgid, __u64 delta)
 {
     struct cg_stat_val *v, zero = {};
@@ -70,7 +75,7 @@ static __always_inline void cgstats_add_runtime(__u64 cgid, __u64 delta)
     __sync_fetch_and_add(&v->runtime_ns, delta);
 }
 
-
+// 把「以 cgroup ID 為 key」的統計值（context switches / wakeups / migrations）累加
 static __always_inline void cgstats_inc(__u64 cgid, int which)
 {
     struct cg_stat_val *v, zero = {};

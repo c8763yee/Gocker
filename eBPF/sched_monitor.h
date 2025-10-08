@@ -14,7 +14,8 @@ typedef int32_t  sm_s32;
 
 #define DEFAULT_RUNTIME_THRESHOLD_NS (5ULL * 1000 * 1000)
 
-enum evt_type {  // event type
+// event type
+enum evt_type {  
     EVT_SWITCH  = 1,
     EVT_WAKEUP  = 2,
     EVT_RUNTIME = 3,
@@ -28,13 +29,14 @@ struct evt {     // record event
 
     sm_u32 pid;  // 等同於thread id
     sm_u32 tgid; // tgid = process ID（thread group leader 的 TID）
-    sm_u64 cgroup_id;
+    sm_u64 cgroup_id; 
 
+    // 輔助欄位，可攜帶額外資訊（例如目標 CPU、延遲、任務狀態等）
     sm_s32 aux0;
     sm_s32 aux1;
     sm_u64 aux2;
 
-    char comm[16];
+    char comm[16];  // process 名稱
 };
 
 struct cg_stat_val {
