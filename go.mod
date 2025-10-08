@@ -3,6 +3,7 @@ module gocker
 go 1.25.1
 
 require (
+	github.com/aquasecurity/libbpfgo v0.6.2
 	github.com/google/go-containerregistry v0.20.6
 	github.com/vishvananda/netlink v1.3.1
 )

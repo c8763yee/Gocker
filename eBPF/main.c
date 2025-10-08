@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include "sched_monitor.h"
 #include <errno.h>
+#include <dirent.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -10,7 +11,7 @@
 #include <unistd.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
-#include <string.h>
+#include <limits.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 
@@ -19,9 +20,8 @@
 static volatile sig_atomic_t exiting = 0;
 static void on_sigint(int signo) { (void)signo; exiting = 1; }
 
-struct filter_ctx {
-    __u64 target_cgid;
-};
+static const uint64_t runtime_threshold_ns = DEFAULT_RUNTIME_THRESHOLD_NS;
+static const char target_cgroup_root[] = "/sys/fs/cgroup/gocker";
 
 
 static const char *evt_name(uint32_t t)
@@ -38,11 +38,7 @@ static const char *evt_name(uint32_t t)
 static int handle_event(void *ctx, void *data, size_t len)
 {
     const struct evt *e = data;
-    const struct filter_ctx *fctx = ctx;
-    (void)len;
-
-    if (fctx && fctx->target_cgid && e->cgroup_id != fctx->target_cgid)
-        return 0;
+    (void)ctx; (void)len; // 這兩行是為了避免未使用參數 (ctx, len) 被編譯器警告。
 
 
     printf("ts=%llu cpu=%u type=%s pid=%u tgid=%u cgid=%llu aux0=%d aux1=%d aux2=%llu comm=%s\n",
@@ -59,7 +55,7 @@ static int handle_event(void *ctx, void *data, size_t len)
     return 0;
 }
 
-
+// allow the process to pin BPF maps by lifting RLIMIT_MEMLOCK
 static int bump_memlock_rlimit(void)
 {
     struct rlimit rl = {RLIM_INFINITY, RLIM_INFINITY};
@@ -67,79 +63,142 @@ static int bump_memlock_rlimit(void)
 }
 
 
-static void dump_cgstats(struct sched_monitor_bpf *skel, __u64 target_cgid)
+static void dump_cgstats(struct sched_monitor_bpf *skel)
 {
-    int map_fd = bpf_map__fd(skel->maps.cg_stats);
+    // 取得 eBPF map 的 file descriptor
+    int map_fd = bpf_map__fd(skel->maps.cg_stats);// skel->maps.cg_stats 對應 eBPF 端定義的 cg_stats map。
     __u64 key = 0, next_key = 0;
     struct cg_stat_val val;
 
-
-    printf("=== per-cgroup stats ===\n");
-    if (target_cgid) {
-        if (bpf_map_lookup_elem(map_fd, &target_cgid, &val) == 0) {
-            printf("cgid=%llu runtime_ns=%llu ctx_switches=%llu wakeups=%llu migrations=%llu\n",
-                    (unsigned long long)target_cgid,
-                    (unsigned long long)val.runtime_ns,
-                    (unsigned long long)val.ctx_switches,
-                    (unsigned long long)val.wakeups,
-                    (unsigned long long)val.migrations);
-        } else {
-            printf("cgid=%llu not present\n", (unsigned long long)target_cgid);
-        }
-        return;
-    }
-
+    // 顯示目前的 runtime 閾值（runtime >= runtime_threshold_ns 的 cgroup 會顯示）
+    printf("=== per-cgroup stats (runtime >= %lluns) ===\n",
+            (unsigned long long)runtime_threshold_ns);
     int ret = bpf_map_get_next_key(map_fd, NULL, &key);
+
+    // 迴圈遍歷 map 直到沒有下一個 key（bpf_map_get_next_key 會回傳 -1）
     while (ret == 0) {
-        if (bpf_map_lookup_elem(map_fd, &key, &val) == 0) {
-            printf("cgid=%llu runtime_ns=%llu ctx_switches=%llu wakeups=%llu migrations=%llu\n",
+        if (bpf_map_lookup_elem(map_fd, &key, &val) == 0) {  // // 根據 key 查詢對應的 value（這裡是 struct cg_stat_val）
+            if (runtime_threshold_ns && val.runtime_ns < runtime_threshold_ns) {  // 若設定了 runtime 閾值，且該 cgroup 的 runtime 太短，則略過此條目。
+                // 繼續取得下一個 key
+                ret = bpf_map_get_next_key(map_fd, &key, &next_key);
+                key = next_key;
+                continue;
+            }
+
+            printf("cgid=%llu runtime_ns=%llu max_runtime_ns=%llu ctx_switches=%llu wakeups=%llu migrations=%llu\n",
                     (unsigned long long)key,
                     (unsigned long long)val.runtime_ns,
+                    (unsigned long long)val.max_runtime_ns,
                     (unsigned long long)val.ctx_switches,
                     (unsigned long long)val.wakeups,
                     (unsigned long long)val.migrations);
+
+            //  - cgid：cgroup ID
+            //  - runtime_ns：累積執行時間（ns）
+            //  - max_runtime_ns：單次執行最大時間
+            //  - ctx_switches：context switch 次數
+            //  - wakeups：被喚醒次數
+            //  - migrations：CPU 遷移次數
         }
+
+        // 取得下一個 key，準備進入下一輪迴圈。
         ret = bpf_map_get_next_key(map_fd, &key, &next_key);
         key = next_key;
     }
 }
 
-static void dump_pidstats(struct sched_monitor_bpf *skel, __u64 target_cgid)
+static int add_allowed_cgroup(int map_fd, __u64 cgid)
 {
-    int map_fd = bpf_map__fd(skel->maps.pid_stats);
-    struct pid_stat_key key, next_key;
-    struct pid_stat_val val;
-
-    printf("=== per-pid stats ===\n");
-
-    int ret = bpf_map_get_next_key(map_fd, NULL, &key);
-    while (ret == 0) {
-        if (key.cgid == target_cgid) {
-            if (bpf_map_lookup_elem(map_fd, &key, &val) == 0) {
-                printf("pid=%u runtime_ns=%llu ctx_switches=%llu wakeups=%llu migrations=%llu\n",
-                        key.pid,
-                        (unsigned long long)val.runtime_ns,
-                        (unsigned long long)val.ctx_switches,
-                        (unsigned long long)val.wakeups,
-                        (unsigned long long)val.migrations);
-            }
-        }
-        ret = bpf_map_get_next_key(map_fd, &key, &next_key);
-        key = next_key;
-    }
+    uint8_t one = 1;
+    if (bpf_map_update_elem(map_fd, &cgid, &one, BPF_ANY) < 0)
+        return -errno;
+    return 0;
 }
 
-static int resolve_cgroup_id(const char *path, __u64 *cgid)
+
+//負責從指定路徑一路走訪所有子 cgroup，並把每個 cgroup 的 inode (即 cgroup ID) 加入 BPF map
+// 功能：遞迴掃描一棵 cgroup 目錄樹，
+//       將每個 cgroup（目錄）的 inode 寫入 BPF map。
+//       inode 在 cgroup v2 中等同於 bpf_get_current_cgroup_id() 所回傳的 cgroup ID。
+//       -> 這樣 eBPF 程式端就能判斷當前任務是否屬於允許監控的 cgroup。
+static int walk_cgroup_tree(int map_fd, const char *path)
 {
     struct stat st;
 
-    if (stat(path, &st) != 0) {
-        fprintf(stderr, "stat(%s) failed: %s\n", path, strerror(errno));
-        return -1;
-    }
+    if (stat(path, &st) < 0)  // 先對指定路徑做 stat()，確認該路徑存在並可存取。
+        return -errno;
+    if (!S_ISDIR(st.st_mode))  // 若該路徑不是目錄（例如檔案），直接回傳錯誤。
+        return -ENOTDIR;
 
-    *cgid = st.st_ino;
-    return 0;
+    // 將目前這個目錄（cgroup）的 inode 寫入 allowed_cgroups map。
+    int err = add_allowed_cgroup(map_fd, st.st_ino);
+    if (err)
+        return err;
+
+    // 開啟當前 cgroup 目錄
+    DIR *dir = opendir(path);
+    if (!dir)
+        return -errno;
+
+    struct dirent *entry;
+
+    // 逐一讀取目錄內的項目
+    while (1) {
+        errno = 0;                       // 清除 errno，避免殘值影響錯誤判斷
+        entry = readdir(dir);            // 讀取下一個目錄項目
+        if (!entry) {
+            if (err == 0 && errno != 0)  // 若 readdir 發生錯誤（非正常結束）
+                err = -errno;
+            break;
+        }
+
+         // 跳過 "." 和 ".." 這兩個特殊目錄
+        if (entry->d_name[0] == '.' &&
+            (entry->d_name[1] == '\0' ||
+             (entry->d_name[1] == '.' && entry->d_name[2] == '\0')))
+            continue;
+
+        // 若不是目錄（例如 regular file 或 symlink），直接跳過
+        if (entry->d_type != DT_DIR && entry->d_type != DT_UNKNOWN)  // d_type == DT_UNKNOWN 表示檔案系統無法直接提供類型，仍需 stat 檢查
+            continue;
+
+        // 組合子目錄的完整路徑，例如 "/sys/fs/cgroup/gocker/containerA"
+        char child_path[PATH_MAX];
+        int len = snprintf(child_path, sizeof(child_path), "%s/%s", path, entry->d_name);
+
+        // 若路徑太長或 snprintf 出錯，回傳 ENAMETOOLONG。
+        if (len < 0 || len >= (int)sizeof(child_path)) {
+            err = -ENAMETOOLONG;
+            break;
+        }
+
+        // 對子目錄做 stat()，確認它真的是一個目錄。
+        struct stat child_stat;
+        if (stat(child_path, &child_stat) < 0) {
+            err = -errno;
+            break;
+        }
+        if (!S_ISDIR(child_stat.st_mode))
+            continue;
+
+        // 遞迴呼叫自己，繼續往下層走訪。
+        // 每層都會把該層的 inode 寫入 map。
+        err = walk_cgroup_tree(map_fd, child_path);
+        if (err)
+            break;
+    }
+    closedir(dir);
+    return err;
+}
+
+// 將指定路徑下的 cgroup,掃描出所有子 cgroup，並把它們的 ID 寫入 eBPF map：allowed_cgroups。
+static int populate_allowed_cgroups(struct sched_monitor_bpf *skel, const char *root_path)
+{
+    int map_fd = bpf_map__fd(skel->maps.allowed_cgroups);
+    if (map_fd < 0)
+        return -errno;
+
+    return walk_cgroup_tree(map_fd, root_path);
 }
 
 int main(int argc, char **argv)
@@ -148,48 +207,59 @@ int main(int argc, char **argv)
     struct ring_buffer *rb = NULL;
     struct sched_monitor_bpf *skel = NULL;
     int err;
-    const char *target_cg_path = "/sys/fs/cgroup/user.slice/user-1000.slice";
-    __u64 target_cgid = 0;
-    struct filter_ctx fctx = {0};
 
 
     libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
     libbpf_set_print((libbpf_print_fn_t)NULL); // silence; comment if debugging
 
 
-    if (resolve_cgroup_id(target_cg_path, &target_cgid))
-        return 1;
-
+    // 嘗試提高當前程序的 memlock 限制（BPF 需要鎖定部分記憶體，否則載入時會失敗）
     if ((err = bump_memlock_rlimit())) {
         fprintf(stderr, "setrlimit(RLIMIT_MEMLOCK) failed: %d\n", err);
         return 1;
     }
 
 
-    skel = sched_monitor_bpf__open();
+    // 開啟編譯好的 BPF skeleton（由 bpftool 或 libbpf autogen 產生的 .bpf.o 封裝）
+    skel = sched_monitor_bpf__open();  
     if (!skel) {
         fprintf(stderr, "failed to open BPF skeleton\n");
         return 1;
     }
 
 
-    skel->rodata->target_cgid = target_cgid;
+    // 若 skeleton 中有 .rodata 區段（即 eBPF 程式裡的 const volatile 變數）
+    // 這裡可以在載入前動態修改其值
+    if (skel->rodata) {
+        skel->rodata->runtime_event_threshold_ns = runtime_threshold_ns;
+        skel->rodata->filter_enabled = 1;
+    }
 
 
-    if ((err = sched_monitor_bpf__load(skel))) {
+    // 建立 maps、驗證指令合法性，並準備 attach
+    if ((err = sched_monitor_bpf__load(skel))) {  // 載入 BPF program 
         fprintf(stderr, "failed to load and verify BPF programs: %d\n", err);
         goto cleanup;
     }
 
 
-    if ((err = sched_monitor_bpf__attach(skel))) {
+    // 將允許監控的 cgroup ID 寫入 map（user-space 傳入的 target_cgroup_root）
+    // 通常對應 eBPF 端的 allowed_cgroups map
+    if ((err = populate_allowed_cgroups(skel, target_cgroup_root))) {
+        fprintf(stderr, "failed to populate cgroup filter from %s: %d\n",
+                target_cgroup_root, err);
+        goto cleanup;
+    }
+
+
+    if ((err = sched_monitor_bpf__attach(skel))) {   // 掛載 tracepoint 
         fprintf(stderr, "failed to attach BPF programs: %d\n", err);
         goto cleanup;
     }
 
 
-    fctx.target_cgid = target_cgid;
-    rb = ring_buffer__new(bpf_map__fd(skel->maps.events_rb), handle_event, &fctx, NULL);
+    // handle_event 是 callback，用來處理從 kernel 傳回的事件資料
+    rb = ring_buffer__new(bpf_map__fd(skel->maps.events_rb), handle_event, NULL, NULL);  // 建立 ring buffer
     if (!rb) {
         fprintf(stderr, "failed to create ring buffer\n");
         goto cleanup;
@@ -200,32 +270,29 @@ int main(int argc, char **argv)
     signal(SIGTERM, on_sigint);
 
 
-    printf("filtering to cgroup %s (cgid=%llu)\n",
-            target_cg_path, (unsigned long long)target_cgid);
     printf("running... Ctrl-C to exit.\n");
 
 
     // simple poll loop with periodic stats dump
-    uint64_t last_dump_ms = 0;
-    while (!exiting) {
-        int ret = ring_buffer__poll(rb, 200 /* ms */);
+    uint64_t last_dump_ms = 0;  // 上次dump 的時間 (ms)
+    while (!exiting) {          // 持續監聽直到使用者中斷
+        int ret = ring_buffer__poll(rb, 200 /* ms */);   // 每 200ms read一次 ring buffer 事件
         if (ret < 0 && ret != -EINTR) {
             fprintf(stderr, "ring_buffer__poll: %d\n", ret);
         break;
         }
         struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        uint64_t now_ms = (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec/1000000;
-        if (now_ms - last_dump_ms >= 2000) {
-            dump_cgstats(skel, target_cgid);
-            dump_pidstats(skel, target_cgid);
-            last_dump_ms = now_ms;
+        clock_gettime(CLOCK_MONOTONIC, &ts);         // 取得目前的單調時間
+        uint64_t now_ms = (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec/1000000;  // 檢查距離上次執行是否已過 2000 ms（也就是 2 秒）
+        if (now_ms - last_dump_ms >= 2000) {      // 每隔 2 秒輸出一次統計
+            dump_cgstats(skel);                   // 呼叫 user-space 函式印出 cgroup 統計
+            last_dump_ms = now_ms;                // 更新上次輸出時間
         }
     }
 
 
 cleanup:
     ring_buffer__free(rb);
-    sched_monitor_bpf__destroy(skel);
+    sched_monitor_bpf__destroy(skel);  // 清理
     return err != 0;
 }
