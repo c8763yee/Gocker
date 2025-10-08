@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,29 @@ func SetupRootfs(mountPoint string, imageName, imageTag string) error {
 		} else {
 			return fmt.Errorf("掛載 OverlayFS 失敗: %w", err)
 		}
+	}
+
+	// 4.1 複製eBPF 監控服務檔案到容器目錄
+	// srcPath := config.BPFServiceExeHost
+	srcPath, _ := filepath.Abs(config.BPFServiceExeHost)
+	dstPath := filepath.Join(mountPoint, config.BPFServiceExeContainer)
+	log.Debugf("正在複製 eBPF 監控服務檔案到容器: %s -> %s", srcPath, dstPath)
+	os.MkdirAll(filepath.Dir(dstPath), 0755)
+
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("無法開啟 eBPF 監控服務檔案: %w", err)
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return fmt.Errorf("無法建立容器內的 eBPF 監控服務檔案: %w", err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("無法複製 eBPF 監控服務檔案: %w", err)
 	}
 
 	// 5. 執行 pivot_root 將根目錄切換到 mountPoint

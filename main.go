@@ -1,6 +1,9 @@
 // main.go
+
 package main
 
+// execute `make` in eBPF directory if `ebpf-sched-monitor` binary not found in `eBPF` directory
+//go:generate bash -c "[ -f ./eBPF/ebpf-sched-monitor ] || (cd eBPF && make)"
 import (
 	"os"
 

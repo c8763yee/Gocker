@@ -195,6 +195,24 @@ func InitContainer() error {
 		return fmt.Errorf("子行程: 找不到命令 '%s': %w", req.ContainerCommand, err)
 	}
 
+	// 8. 啟用 eBPF 監控服務
+	stdoutFile, err := os.OpenFile(config.BPFServiceOutputLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("子行程: 開啟 eBPF 監控服務輸出檔失敗: %w", err)
+	}
+
+	cmd := exec.Command(config.BPFServiceExeContainer)
+	cmd.SysProcAttr = &syscall.SysProcAttr{}
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = stdoutFile
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		// return fmt.Errorf("子行程: 啟動 eBPF 監控服務失敗: %w", err)
+		log.Errorf("子行程: 啟動 eBPF 監控服務失敗: %v", err)
+	}
+
+	// 9. 執行使用者命令
 	log.Infof("子行程: 執行 exec syscall: %s", cmdPath)
 	args := append([]string{req.ContainerCommand}, req.ContainerArgs...)
 	if err := syscall.Exec(cmdPath, args, os.Environ()); err != nil {

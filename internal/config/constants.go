@@ -34,4 +34,10 @@ const (
 
 	// 日誌設定
 	DefaultLogLevel = "debug"
+
+	// 執行檔相關
+	DefaultCommand         = "/bin/sh"
+	BPFServiceExeHost      = "eBPF/ebpf-sched-monitor"
+	BPFServiceExeContainer = "/usr/bin/ebpf-sched-monitor"
+	BPFServiceOutputLog    = "/var/log/ebpf-sched-monitor.log"
 )
