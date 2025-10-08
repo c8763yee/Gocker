@@ -100,19 +100,18 @@ func SetupRootfs(mountPoint string, imageName, imageTag string) error {
 	oldUmask := syscall.Umask(0)
 
 	// create essential device nodes
-	syscall.Mknod("/dev/null",   syscall.S_IFCHR|0666, int((1<<8)|3))  // major=1, minor=3
-	syscall.Mknod("/dev/zero",   syscall.S_IFCHR|0666, int((1<<8)|5))
-	syscall.Mknod("/dev/full",   syscall.S_IFCHR|0666, int((1<<8)|7))
+	syscall.Mknod("/dev/null", syscall.S_IFCHR|0666, int((1<<8)|3)) // major=1, minor=3
+	syscall.Mknod("/dev/zero", syscall.S_IFCHR|0666, int((1<<8)|5))
+	syscall.Mknod("/dev/full", syscall.S_IFCHR|0666, int((1<<8)|7))
 	syscall.Mknod("/dev/random", syscall.S_IFCHR|0666, int((1<<8)|8))
-	syscall.Mknod("/dev/urandom",syscall.S_IFCHR|0666, int((1<<8)|9))
-	syscall.Mknod("/dev/tty",    syscall.S_IFCHR|0666, int((5<<8)|0))
+	syscall.Mknod("/dev/urandom", syscall.S_IFCHR|0666, int((1<<8)|9))
+	syscall.Mknod("/dev/tty", syscall.S_IFCHR|0666, int((5<<8)|0))
 
 	syscall.Umask(oldUmask)
 
 	// set permissions for /tmp and /dev/shm (we've set it at 5.1, but just to be sure)
 	os.Chmod("/tmp", 01777)
 	os.Chmod("/dev/shm", 01777)
-
 
 	return nil
 }
