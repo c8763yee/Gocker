@@ -186,6 +186,37 @@ func InitContainer() error {
 	// 5. 掛載必要的核心虛擬檔案系統
 	syscall.Mount("proc", "/proc", "proc", 0, "")
 	syscall.Mount("sysfs", "/sys", "sysfs", 0, "")
+	// 5.1 make necessary directories
+	os.MkdirAll("/dev/pts", 0755)
+	os.MkdirAll("/dev/shm", 0755)
+	os.MkdirAll("/tmp", 01777)
+	os.MkdirAll("/run", 0755)
+	// 5.2 mount dev, devpts, tmpfs
+	syscall.Mount("tmpfs", "/dev", "tmpfs", 0, "mode=0755")
+	syscall.Mount("devpts", "/dev/pts", "devpts", 0, "newinstance,ptmxmode=0666,mode=0620,gid=5")
+	// 5.3 create symlink for ptmx
+	os.Remove("/dev/ptmx")
+	os.Symlink("pts/ptmx", "/dev/ptmx")
+	// 5.4 mount /tmp, /run, /dev/shm as tmpfs
+	syscall.Mount("tmpfs", "/tmp", "tmpfs", 0, "mode=1777")
+	syscall.Mount("tmpfs", "/run", "tmpfs", 0, "mode=0755")
+	syscall.Mount("tmpfs", "/dev/shm", "tmpfs", 0, "mode=1777")
+
+	oldUmask := syscall.Umask(0)
+
+	// 5.5 create essential device nodes
+	syscall.Mknod("/dev/null",   syscall.S_IFCHR|0666, int((1<<8)|3))  // major=1, minor=3
+	syscall.Mknod("/dev/zero",   syscall.S_IFCHR|0666, int((1<<8)|5))
+	syscall.Mknod("/dev/full",   syscall.S_IFCHR|0666, int((1<<8)|7))
+	syscall.Mknod("/dev/random", syscall.S_IFCHR|0666, int((1<<8)|8))
+	syscall.Mknod("/dev/urandom",syscall.S_IFCHR|0666, int((1<<8)|9))
+	syscall.Mknod("/dev/tty",    syscall.S_IFCHR|0666, int((5<<8)|0))
+
+	syscall.Umask(oldUmask)
+
+	// 5.6 set permissions for /tmp and /dev/shm (we've set it at 5.1, but just to be sure)
+	os.Chmod("/tmp", 01777)
+	os.Chmod("/dev/shm", 01777)
 
 	// 6. 在容器內部設定網路
 	if err := network.ConfigureContainerNetwork(req.VethPeerName); err != nil {
