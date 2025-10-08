@@ -3,6 +3,7 @@ package builder
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -96,13 +97,33 @@ func ParseGockerfile(filepath string) (*Gockerfile, error) {
 			if len(args) == 0 {
 				return nil, fmt.Errorf("第 %d 行: CMD 指令需要指定命令", lineNum)
 			}
-			gf.Cmd = args
+			// 檢查是否為 JSON 陣列格式
+			if strings.HasPrefix(line[3:], " [") || strings.HasPrefix(line[3:], "[") {
+				cmdLine := strings.TrimSpace(line[3:])
+				var cmdArray []string
+				if err := json.Unmarshal([]byte(cmdLine), &cmdArray); err != nil {
+					return nil, fmt.Errorf("第 %d 行: CMD JSON 格式錯誤: %w", lineNum, err)
+				}
+				gf.Cmd = cmdArray
+			} else {
+				gf.Cmd = args
+			}
 
 		case "ENTRYPOINT":
 			if len(args) == 0 {
 				return nil, fmt.Errorf("第 %d 行: ENTRYPOINT 指令需要指定命令", lineNum)
 			}
-			gf.Entrypoint = args
+			// 檢查是否為 JSON 陣列格式
+			if strings.HasPrefix(line[10:], " [") || strings.HasPrefix(line[10:], "[") {
+				epLine := strings.TrimSpace(line[10:])
+				var epArray []string
+				if err := json.Unmarshal([]byte(epLine), &epArray); err != nil {
+					return nil, fmt.Errorf("第 %d 行: ENTRYPOINT JSON 格式錯誤: %w", lineNum, err)
+				}
+				gf.Entrypoint = epArray
+			} else {
+				gf.Entrypoint = args
+			}
 
 		case "COPY":
 			if len(args) < 2 {
