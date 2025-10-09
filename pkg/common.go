@@ -34,3 +34,16 @@ func WriteContainerInfo(containerDir string, info *types.ContainerInfo) error {
 	encoder.SetIndent("", "    ") // 格式化 JSON
 	return encoder.Encode(info)
 }
+
+func GetSelfExecutablePath() (string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("無法獲取執行檔路徑: %w", err)
+	}
+
+	exePath, err = filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return "", fmt.Errorf("無法解析執行檔路徑的符號連結: %w", err)
+	}
+	return exePath, nil
+}

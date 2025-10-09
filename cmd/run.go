@@ -3,6 +3,9 @@ package cmd
 
 import (
 	"os"
+	"path/filepath"
+
+	"gocker/pkg"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -10,7 +13,6 @@ import (
 	"gocker/internal"
 	"gocker/internal/config"
 	"gocker/internal/types"
-	"gocker/pkg"
 )
 
 var request types.RunRequest
@@ -23,7 +25,13 @@ Run a command in a new container with specified image and command.
 Use double dashes (--) if you want to pass arguments to the command. like 'gocker run --<flags>... -- /bin/sh'."`,
 	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		if _, err := os.Stat(config.BPFServiceExeHost); os.IsNotExist(err) {
+		exe, err := pkg.GetSelfExecutablePath()
+		if err != nil {
+			logrus.Fatalf("無法獲取執行檔路徑: %v", err)
+		}
+		logrus.Infof("Gocker 執行檔路徑: %s", exe)
+		logrus.Infof("尋找 eBPF 監控服務執行檔: %s", filepath.Join(filepath.Dir(exe), config.BPFServiceExeHost))
+		if _, err := os.Stat(filepath.Join(filepath.Dir(exe), config.BPFServiceExeHost)); os.IsNotExist(err) {
 			logrus.Fatalf(
 				`
 %s 執行檔不存在，

@@ -205,7 +205,7 @@ func InitContainer() error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = stdoutFile
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = stdoutFile
 
 	if err := cmd.Start(); err != nil {
 		// return fmt.Errorf("子行程: 啟動 eBPF 監控服務失敗: %w", err)
