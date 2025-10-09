@@ -2,13 +2,17 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
+
+	"gocker/pkg"
+
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"gocker/internal"
 	"gocker/internal/config"
 	"gocker/internal/types"
-	"gocker/pkg"
 )
 
 var request types.RunRequest
@@ -16,16 +20,37 @@ var request types.RunRequest
 var runCommand = &cobra.Command{
 	Use:   "run [OPTIONS] IMAGE COMMAND [ARG...]",
 	Short: "Run a command in a new container",
-	Long:  "Run a command in a new container with specified image and command.",
-	Args:  cobra.MinimumNArgs(1),
+	Long: `
+Run a command in a new container with specified image and command.
+Use double dashes (--) if you want to pass arguments to the command. like 'gocker run --<flags>... -- /bin/sh'."`,
+	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		exe, err := pkg.GetSelfExecutablePath()
+		if err != nil {
+			logrus.Fatalf("無法獲取執行檔路徑: %v", err)
+		}
+		logrus.Infof("Gocker 執行檔路徑: %s", exe)
+		logrus.Infof("尋找 eBPF 監控服務執行檔: %s", filepath.Join(filepath.Dir(exe), config.BPFServiceExeHost))
+		if _, err := os.Stat(filepath.Join(filepath.Dir(exe), config.BPFServiceExeHost)); os.IsNotExist(err) {
+			logrus.Fatalf(
+				`
+%s 執行檔不存在，
+請先在 Gocker 目錄中從以下方式選擇一個執行:
+1. 進入 eBPF 目錄，然後執行 make 指令
+2. 透過 go generate 指令來生成 %s`, config.BPFServiceExeHost, config.BPFServiceExeHost)
+		}
+
 		imageName, imageTag := pkg.Parse(args[0])
 		logrus.Infof("Image: %s, Tag: %s", imageName, imageTag)
 
 		request.ImageName = imageName
 		request.ImageTag = imageTag
 
-		if len(args) > 1 {
+		if len(args) == 1 {
+			logrus.Info("沒有指定容器命令，預設使用 /bin/sh")
+			request.ContainerCommand = config.DefaultCommand
+			request.ContainerArgs = []string{}
+		} else {
 			request.ContainerCommand = args[1]
 			if len(args) > 2 {
 				request.ContainerArgs = args[2:]
