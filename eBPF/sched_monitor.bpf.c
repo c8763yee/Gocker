@@ -13,12 +13,12 @@ const volatile __u8 filter_enabled;  // cgroup過濾功能的開關
 /* allow-list of cgroup IDs we care about */
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __type(key, __u64);
-    __type(value, __u8);
-    __uint(max_entries, 8192);
+    __type(key, __u64);  // key -> cgroup id  
+    __type(value, __u8);  // allowed
+    __uint(max_entries, 8192);  // 最多允許 8192 筆
 } allowed_cgroups SEC(".maps");
 
-// 統計cgroup 數據
+// 統計每個 cgroup 數據
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __type(key, __u64); // cgroup_id
