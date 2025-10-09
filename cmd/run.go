@@ -23,13 +23,13 @@ Run a command in a new container with specified image and command.
 Use double dashes (--) if you want to pass arguments to the command. like 'gocker run --<flags>... -- /bin/sh'."`,
 	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		if _, err := os.Stat("eBPF/ebpf-sched-monitor"); os.IsNotExist(err) {
-			logrus.Fatal(
+		if _, err := os.Stat(config.BPFServiceExeHost); os.IsNotExist(err) {
+			logrus.Fatalf(
 				`
-eBPF/ebpf-sched-monitor 執行檔不存在，
-請先在 Gocker 目錄中執行
+%s 執行檔不存在，
+請先在 Gocker 目錄中從以下方式選擇一個執行:
 1. 進入 eBPF 目錄，然後執行 make 指令
-2. 透過 go generate 指令來生成 eBPF/ebpf-sched-monitor。`)
+2. 透過 go generate 指令來生成 %s`, config.BPFServiceExeHost, config.BPFServiceExeHost)
 		}
 
 		imageName, imageTag := pkg.Parse(args[0])
