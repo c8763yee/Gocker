@@ -189,7 +189,22 @@ func InitContainer() error {
 	}
 	log.Info("子行程: 容器內網路設定完成")
 
-	// 6. 使用 syscall.Exec 執行使用者指定的命令
+	// 6. Run initialization commands if any
+	if len(req.InitCommands) > 0 {
+		log.Infof("Subprocess %d initialization commands", len(req.InitCommands))
+		for idx, commandLine := range req.InitCommands {
+			log.Infof("Subprocess: (%d/%d) Executing: %s", idx+1, len(req.InitCommands), commandLine)
+			initCmd := exec.Command("/bin/sh", "-c", commandLine)
+			initCmd.Stdout = os.Stdout
+			initCmd.Stderr = os.Stderr
+			initCmd.Stdin = os.Stdin
+			if err := initCmd.Run(); err != nil {
+				return fmt.Errorf("Subprocess: Initialization command '%s' failed: %w", commandLine, err)
+			}
+		}
+	}
+
+	// 7. 使用 syscall.Exec 執行使用者指定的命令
 	cmdPath, err := exec.LookPath(req.ContainerCommand)
 	if err != nil {
 		return fmt.Errorf("子行程: 找不到命令 '%s': %w", req.ContainerCommand, err)

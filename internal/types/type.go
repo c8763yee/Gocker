@@ -11,6 +11,7 @@ type RunRequest struct {
 	ContainerArgs    []string
 	MountPoint       string
 	VethPeerName     string
+	InitCommands     []string
 	ContainerLimits
 }
 

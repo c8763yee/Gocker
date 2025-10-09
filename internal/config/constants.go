@@ -40,4 +40,7 @@ const (
 	BPFServiceExeHost      = "eBPF/ebpf-sched-monitor"
 	BPFServiceExeContainer = "/usr/bin/ebpf-sched-monitor"
 	BPFServiceOutputLog    = "/var/log/ebpf-sched-monitor.log"
+
+	// Initialization instructions file
+	DefaultInitInstructionFile = "Gockerfile"
 )
