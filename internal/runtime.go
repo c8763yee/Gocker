@@ -55,17 +55,35 @@ func RunContainer(req *types.RunRequest) error {
 	}
 	mountPoint := filepath.Join(containerDir, "rootfs")
 	req.MountPoint = mountPoint
+	req.ContainerID = containerID
+
+	allocatedIP, err := network.AllocateContainerIP(containerID, req.RequestedIP)
+	if err != nil {
+		return fmt.Errorf("cannot allocate container IP: %w", err)
+	}
+	req.IPAddress = allocatedIP
+
+	defer func() {
+		if allocatedIP != "" {
+			if err := network.ReleaseContainerIP(containerID); err != nil {
+				log.WithError(err).Warn("cannot release container IP")
+			}
+			allocatedIP = ""
+		}
+	}()
 
 	// 3. 建立並寫入初始的 config.json
 	info := &types.ContainerInfo{
-		ID:         containerID,
-		Name:       req.ContainerName,
-		Command:    req.ContainerCommand,
-		Status:     types.Created,
-		CreatedAt:  time.Now(),
-		Image:      fmt.Sprintf("%s:%s", req.ImageName, req.ImageTag),
-		MountPoint: mountPoint,
-		Limits:     req.ContainerLimits,
+		ID:          containerID,
+		Name:        req.ContainerName,
+		Command:     req.ContainerCommand,
+		Status:      types.Created,
+		CreatedAt:   time.Now(),
+		Image:       fmt.Sprintf("%s:%s", req.ImageName, req.ImageTag),
+		MountPoint:  mountPoint,
+		Limits:      req.ContainerLimits,
+		RequestedIP: req.RequestedIP,
+		IPAddress:   allocatedIP,
 	}
 	if err := pkg.WriteContainerInfo(containerDir, info); err != nil {
 		return fmt.Errorf("寫入容器設定檔失敗: %w", err)
@@ -184,7 +202,7 @@ func InitContainer() error {
 	}
 
 	// 5. 在容器內部設定網路
-	if err := network.ConfigureContainerNetwork(req.VethPeerName); err != nil {
+	if err := network.ConfigureContainerNetwork(req.VethPeerName, req.IPAddress); err != nil {
 		return fmt.Errorf("子行程: 設定容器網路失敗: %w", err)
 	}
 	log.Info("子行程: 容器內網路設定完成")

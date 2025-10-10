@@ -12,6 +12,8 @@ type RunRequest struct {
 	MountPoint       string
 	VethPeerName     string
 	InitCommands     []string
+	RequestedIP      string
+	IPAddress        string
 	ContainerLimits
 }
 
@@ -30,16 +32,18 @@ const (
 
 // ContainerInfo 用於儲存容器的metadata
 type ContainerInfo struct {
-	ID         string          `json:"id"`
-	PID        int             `json:"pid"`
-	Name       string          `json:"name"`
-	Command    string          `json:"command"`
-	Status     string          `json:"status"`
-	CreatedAt  time.Time       `json:"createdAt"`
-	Image      string          `json:"image"`
-	MountPoint string          `json:"mountPoint"`
-	FinishedAt time.Time       `json:"finishedAt,omitempty"`
-	Limits     ContainerLimits `json:"limits,omitempty"`
+	ID          string          `json:"id"`
+	PID         int             `json:"pid"`
+	Name        string          `json:"name"`
+	Command     string          `json:"command"`
+	Status      string          `json:"status"`
+	CreatedAt   time.Time       `json:"createdAt"`
+	Image       string          `json:"image"`
+	MountPoint  string          `json:"mountPoint"`
+	RequestedIP string          `json:"requestedIP,omitempty"`
+	IPAddress   string          `json:"ipAddress,omitempty"`
+	FinishedAt  time.Time       `json:"finishedAt,omitempty"`
+	Limits      ContainerLimits `json:"limits,omitempty"`
 }
 
 // ImageManifest Image 的結構

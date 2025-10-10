@@ -30,6 +30,7 @@ Run a command in a new container with specified image and command.
 Use double dashes (--) if you want to pass arguments to the command. like 'gocker run --<flags>... -- /bin/sh'."`,
 	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		request.IPAddress = ""
 		exe, err := pkg.GetSelfExecutablePath()
 		if err != nil {
 			logrus.Fatalf("無法獲取執行檔路徑: %v", err)
@@ -102,6 +103,7 @@ func init() {
 	runCommand.Flags().IntVar(&request.PidsLimit, "pids-limit", config.DefaultPidsLimit, "Limit the number of container tasks")
 	runCommand.Flags().IntVarP(&request.MemoryLimit, "memory", "m", config.DefaultMemoryLimit, "Limit the memory")
 	runCommand.Flags().IntVar(&request.CPULimit, "cpus", config.DefaultCPULimit, "Limit the number of CPUs")
+	runCommand.Flags().StringVar(&request.RequestedIP, "ip", "", "Request a specific IPv4 address for the container")
 	runCommand.Flags().StringVar(&initInstructionFile, "init-file", "", fmt.Sprintf("Path to initialization instructions file (default %s)",
 		config.DefaultInitInstructionFile))
 	rootCmd.AddCommand(runCommand)

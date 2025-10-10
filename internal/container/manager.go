@@ -68,6 +68,10 @@ func (m *Manager) StopContainer(identifier string) error {
 		return fmt.Errorf("更新容器狀態為 Stopped 失敗: %w", err)
 	}
 
+	if err := network.CleanupContainerNetwork(info.ID); err != nil {
+		log.Warnf("釋放容器網路資源失敗: %v", err)
+	}
+
 	log.Infof("容器 %s 已成功停止", identifier)
 	return nil
 }
@@ -219,6 +223,29 @@ func (m *Manager) Start(identifier string) error {
 		return fmt.Errorf("設定容器網路失敗: %w", err)
 	}
 
+	desiredIP := info.IPAddress
+	if info.RequestedIP != "" {
+		desiredIP = info.RequestedIP
+	}
+
+	allocatedIP, err := network.AllocateContainerIP(info.ID, desiredIP)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("cannot allocate container IP: %w", err)
+	}
+
+	releaseIP := true
+	defer func() {
+		if releaseIP {
+			if err := network.ReleaseContainerIP(info.ID); err != nil {
+				log.Warnf("釋放容器 IP 失敗: %v", err)
+			}
+			releaseIP = false
+		}
+	}()
+
+	info.IPAddress = allocatedIP
+
 	// 6. 同步地將設定資訊寫入 pipe
 	imageName, imageTag := pkg.Parse(info.Image)
 	req := &types.RunRequest{
@@ -228,6 +255,9 @@ func (m *Manager) Start(identifier string) error {
 		MountPoint:       info.MountPoint,
 		ContainerLimits:  info.Limits,
 		VethPeerName:     peerName,
+		RequestedIP:      info.RequestedIP,
+		IPAddress:        allocatedIP,
+		ContainerID:      info.ID,
 	}
 
 	encoder := json.NewEncoder(writePipe)
