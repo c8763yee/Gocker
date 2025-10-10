@@ -2,20 +2,78 @@
 package internal
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"gocker/internal/config"
+	"gocker/internal/image"
 	"gocker/internal/types"
 
 	"github.com/sirupsen/logrus"
 )
 
-// RemoveContainer 根據容器 ID 執行解除掛載和刪除操作
-func RemoveContainer(containerID string) error {
+type Remover struct {
+	reader *bufio.Reader
+}
+
+func NewRemover() *Remover {
+	return &Remover{
+		reader: bufio.NewReader(os.Stdin),
+	}
+}
+
+func (r *Remover) RemoveContainer(containerID string) error {
+	return removeContainer(containerID)
+}
+
+func (r *Remover) RemoveAllContainers() error {
+	containers, err := image.ListContainers()
+	if err != nil {
+		return fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	if len(containers) == 0 {
+		fmt.Println("No containers to remove.")
+		return nil
+	}
+
+	fmt.Printf("Are you sure you want to remove all %d containers? (y/n): ", len(containers))
+	input, err := r.reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read input: %w", err)
+	}
+
+	choice := strings.TrimSpace(strings.ToLower(input))
+	if choice != "y" && choice != "yes" {
+		fmt.Println("Cancelled removal of all containers.")
+		return nil
+	}
+
+	removed := 0
+	for _, c := range containers {
+		if err := r.RemoveContainer(c.ID); err != nil {
+			logrus.Errorf("Failed to remove container %s (%s): %v", c.Name, c.ID, err)
+			continue
+		}
+		fmt.Printf("Removed container %s (%s)\n", c.Name, c.ID)
+		removed++
+	}
+
+	if removed == 0 {
+		fmt.Println("No containers were removed.")
+	} else {
+		fmt.Printf("Successfully removed %d containers.\n", removed)
+	}
+
+	return nil
+}
+
+func removeContainer(containerID string) error {
 	// 1. 直接定位到指定容器的目錄
 	containerDir := filepath.Join(config.ContainerStoragePath, containerID)
 	configFilePath := filepath.Join(containerDir, "config.json")

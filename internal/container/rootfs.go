@@ -111,13 +111,13 @@ func SetupRootfs(mountPoint string, imageName, imageTag string) error {
 		return fmt.Errorf("掛載 /sys 失敗: %w", err)
 	}
 
-	// make necessary directories
+	// mount dev, devpts, tmpfs
+	os.MkdirAll("/dev", 0755)
+	syscall.Mount("tmpfs", "/dev", "tmpfs", 0, "mode=0755")
 	os.MkdirAll("/dev/pts", 0755)
 	os.MkdirAll("/dev/shm", 0755)
 	os.MkdirAll("/tmp", 01777)
 	os.MkdirAll("/run", 0755)
-	// mount dev, devpts, tmpfs
-	syscall.Mount("tmpfs", "/dev", "tmpfs", 0, "mode=0755")
 	syscall.Mount("devpts", "/dev/pts", "devpts", 0, "newinstance,ptmxmode=0666,mode=0620,gid=5")
 	// create symlink for ptmx
 	os.Remove("/dev/ptmx")
