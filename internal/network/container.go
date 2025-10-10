@@ -12,11 +12,15 @@ import (
 )
 
 // ConfigureContainerNetwork 設定容器內的網路
-func ConfigureContainerNetwork(peerName string) error {
+func ConfigureContainerNetwork(peerName, ipAddress string) error {
 	// 1. 找到容器內的 veth peer
 	peer, err := netlink.LinkByName(peerName)
 	if err != nil {
 		return fmt.Errorf("在容器內找不到 veth peer '%s': %v", peerName, err)
+	}
+
+	if ipAddress == "" {
+		return fmt.Errorf("no IP address provided for container")
 	}
 
 	// 2. 將 veth peer 重新命名為 eth0
@@ -25,9 +29,15 @@ func ConfigureContainerNetwork(peerName string) error {
 	}
 
 	// 3. 為 eth0 設定 IP 位址
-	addr, err := netlink.ParseAddr(config.ContainerIP)
+	_, subnet, err := net.ParseCIDR(config.NetworkCIDR)
 	if err != nil {
-		return fmt.Errorf("解析容器 IP 位址 '%s' 失敗: %v", config.ContainerIP, err)
+		return fmt.Errorf("cannot parse network CIDR '%s': %v", config.NetworkCIDR, err)
+	}
+
+	maskSize, _ := subnet.Mask.Size()
+	addr, err := netlink.ParseAddr(fmt.Sprintf("%s/%d", ipAddress, maskSize))
+	if err != nil {
+		return fmt.Errorf("解析容器 IP 位址 '%s' 失敗: %v", ipAddress, err)
 	}
 	if err := netlink.AddrAdd(peer, addr); err != nil {
 		return fmt.Errorf("為 eth0 設定 IP 失敗: %v", err)
@@ -55,6 +65,6 @@ func ConfigureContainerNetwork(peerName string) error {
 	lo, _ := netlink.LinkByName("lo")
 	_ = netlink.LinkSetUp(lo)
 
-	logrus.Infof("容器內網路設定完成，IP: %s", config.ContainerIP)
+	logrus.Infof("容器內網路設定完成，IP: %s/%d", ipAddress, maskSize)
 	return nil
 }

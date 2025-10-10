@@ -10,11 +10,13 @@ const (
 	ManifestPath         = ImagesDir + "/manifest.json"
 
 	// 網路設定
-	BridgeName  = "gocker0"
-	BridgeIP    = "10.20.0.1/24"
-	NetworkCIDR = "10.20.0.0/24"
-	ContainerIP = "10.20.0.2/24"
-	GatewayIP   = "10.20.0.1"
+	BridgeName            = "gocker0"
+	BridgeIP              = "10.20.0.1/24"
+	NetworkCIDR           = "10.20.0.0/24"
+	ContainerIP           = "10.20.0.2/24"
+	GatewayIP             = "10.20.0.1"
+	NetworkStateDir       = GockerStorage + "/network"
+	NetworkAllocationFile = NetworkStateDir + "/allocations.json"
 
 	// DNS 設定
 	DNSServers = `nameserver 8.8.8.8
@@ -40,4 +42,7 @@ const (
 	BPFServiceExeHost      = "eBPF/ebpf-sched-monitor"
 	BPFServiceExeContainer = "/usr/bin/ebpf-sched-monitor"
 	BPFServiceOutputLog    = "/var/log/ebpf-sched-monitor.log"
+
+	// Initialization instructions file
+	DefaultInitInstructionFile = "Gockerfile"
 )
