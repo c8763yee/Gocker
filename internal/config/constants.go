@@ -45,4 +45,6 @@ const (
 
 	// Initialization instructions file
 	DefaultInitInstructionFile = "Gockerfile"
+
+	SocketPath = "/var/run/gocker.sock"
 )

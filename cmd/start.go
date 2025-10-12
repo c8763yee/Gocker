@@ -2,26 +2,46 @@
 package cmd
 
 import (
-	"gocker/internal/container"
+	"encoding/json"
+	"gocker/internal/api"
+	"gocker/internal/types"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
+type StartRequest struct {
+	ContainerID string `json:"container_id"`
+}
+
 var startCommand = &cobra.Command{
 	Use:   "start CONTAINER",
-	Short: "Start a stopped container",
-	Long:  "Start a stopped container by its ID or name.",
+	Short: "啟動一個已停止的容器",
+	Long:  "透過容器的 ID 或名稱來啟動一個已停止的容器。",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		containerIdentifier := args[0]
 
-		manager := container.NewManager()
-		if err := manager.Start(containerIdentifier); err != nil {
-			logrus.Fatalf("啟動容器 %s 失敗: %v", containerIdentifier, err)
+		payload, err := json.Marshal(StartRequest{ContainerID: containerIdentifier})
+		if err != nil {
+			logrus.Fatalf("序列化 start 請求失敗: %v", err)
 		}
 
-		logrus.Infof("成功啟動容器: %s", containerIdentifier)
+		req := types.Request{
+			Command: "start",
+			Payload: payload,
+		}
+
+		res, err := api.SendRequest(req)
+		if err != nil {
+			logrus.Fatalf("與 gocker-daemon 通訊失敗: %v", err)
+		}
+
+		if res.Status == "success" {
+			logrus.Info(res.Message)
+		} else {
+			logrus.Fatalf("來自 Daemon 的錯誤: %s", res.Message)
+		}
 	},
 }
 
