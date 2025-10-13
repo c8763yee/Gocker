@@ -178,6 +178,14 @@ install_package() {
         # yum logic can be added here if needed
         echo "yum-based systems might require enabling EPEL or other repos. Manual installation is recommended."
         exit 1
+    elif command -v pacman &> /dev/null; then
+        if [ "$package_name" = "clang" ]; then
+            sudo pacman -S --noconfirm clang
+        elif [ "$package_name" = "llvm" ]; then
+            sudo pacman -S --noconfirm llvm
+        elif [ "$package_name" = "bpf-tools" ]; then
+            sudo pacman -S --noconfirm libbpf bpftool linux-headers
+        fi
     else
         echo "錯誤：找不到支援的套件管理器 (apt/dnf)。請手動安裝。"
         exit 1
