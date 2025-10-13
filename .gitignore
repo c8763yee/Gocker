@@ -32,5 +32,11 @@ go.work.sum
 # .vscode/
 
 alpine-rootfs
-gocker
 ebpf-sched-monitor
+gocker
+gocker-daemon
+
+!cmd/gocker
+!cmd/gocker-daemon
+
+.ccls-cache

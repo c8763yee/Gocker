@@ -70,15 +70,16 @@ func SetupRootfs(mountPoint string, imageName, imageTag string) error {
 	}
 
 	// 4.1 複製eBPF 監控服務檔案到容器目錄
-	// srcPath := config.BPFServiceExeHost
+	srcPath := config.BPFServiceExeHost
+	dstPath := filepath.Join(mountPoint, config.BPFServiceExeContainer)
+
 	exe, err := pkg.GetSelfExecutablePath()
 	if err != nil {
 		log.Warnf("無法獲取執行檔路徑, 使用當前目錄: %v", err)
 		exe = os.Getenv("PWD")
 	}
-	srcPath := filepath.Join(filepath.Dir(exe), config.BPFServiceExeHost)
-	dstPath := filepath.Join(mountPoint, config.BPFServiceExeContainer)
-	log.Debugf("正在複製 eBPF 監控服務檔案到容器: %s -> %s", srcPath, dstPath)
+	srcPath = filepath.Join(filepath.Dir(exe), config.BPFServiceExeHost)
+	log.Infof("正在複製 eBPF 監控服務檔案到容器: %s -> %s", srcPath, dstPath)
 	os.MkdirAll(filepath.Dir(dstPath), 0755)
 
 	src, err := os.Open(srcPath)

@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type RunRequest struct {
 	ImageName        string
@@ -50,4 +53,24 @@ type ContainerInfo struct {
 type ImageManifest struct {
 	ImageID string `json:"imageID"` // 映像的唯一 ID
 	RepoTag string `json:"repoTag"` // 映像的標籤
+}
+
+// Request 是 CLI 向 Daemon 發送的通用結構
+type Request struct {
+	Command string          `json:"command"`           // 例如 "ps", "run", "stop"
+	Payload json.RawMessage `json:"payload,omitempty"` // 承載具體命令的數據
+}
+
+// Response 是 Daemon 向 CLI 回應的通用結構
+type Response struct {
+	Status  string          `json:"status"`            // "success" 或 "error"
+	Message string          `json:"message,omitempty"` // 簡單的文字訊息或錯誤資訊
+	Data    json.RawMessage `json:"data,omitempty"`    // 承載複雜的數據
+}
+
+// ExecRequest 用於執行命令的請求結構
+type ExecRequest struct {
+	ContainerID string   `json:"container_id"` // 容器 ID
+	Command     []string `json:"command"`      // 要執行的命令及其參數
+	Tty         bool     `json:"tty"`          // 是否分配 TTY
 }

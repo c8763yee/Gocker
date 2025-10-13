@@ -3,18 +3,16 @@ package cmd
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"gocker/internal"
 	"gocker/pkg"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"gocker/internal"
 	"gocker/internal/config"
 	"gocker/internal/types"
 )
@@ -30,22 +28,6 @@ Run a command in a new container with specified image and command.
 Use double dashes (--) if you want to pass arguments to the command. like 'gocker run --<flags>... -- /bin/sh'."`,
 	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		request.IPAddress = ""
-		exe, err := pkg.GetSelfExecutablePath()
-		if err != nil {
-			logrus.Fatalf("無法獲取執行檔路徑: %v", err)
-		}
-		logrus.Infof("Gocker 執行檔路徑: %s", exe)
-		logrus.Infof("尋找 eBPF 監控服務執行檔: %s", filepath.Join(filepath.Dir(exe), config.BPFServiceExeHost))
-		if _, err := os.Stat(filepath.Join(filepath.Dir(exe), config.BPFServiceExeHost)); os.IsNotExist(err) {
-			logrus.Fatalf(
-				`
-%s 執行檔不存在，
-請先在 Gocker 目錄中從以下方式選擇一個執行:
-1. 進入 eBPF 目錄，然後執行 make 指令
-2. 透過 go generate 指令來生成 %s`, config.BPFServiceExeHost, config.BPFServiceExeHost)
-		}
-
 		imageName, imageTag := pkg.Parse(args[0])
 		logrus.Infof("Image: %s, Tag: %s", imageName, imageTag)
 
@@ -61,35 +43,6 @@ Use double dashes (--) if you want to pass arguments to the command. like 'gocke
 			if len(args) > 2 {
 				request.ContainerArgs = args[2:]
 			}
-		}
-
-		/*
-		* Initial file name is "Gockerfile" by default
-		* User can override it by --init-file flag
-		* If the specified file does not exist, we will skip the initialization step
-		* If the file is specified but does not exist, we will exit with error
-		* If the file is not specified and does not exist, we will skip the initialization step
-		* If the file exists, we will read the commands from the file and pass it to the container
-		* The commands will be executed in the container before the main command
-		 */
-		instructionPath := initInstructionFile
-		if instructionPath == "" {
-			instructionPath = config.DefaultInitInstructionFile
-		}
-
-		commands, err := loadInitCommands(instructionPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				if initInstructionFile != "" {
-					logrus.Fatalf("Sorry, the file you specified does not exist: %s", instructionPath)
-				}
-				logrus.Debugf("Cannot find initialization instructions file %s, skipping initialization step", instructionPath)
-			} else {
-				logrus.Fatalf("Failed to read initialization instructions file: %v", err)
-			}
-		} else if len(commands) > 0 {
-			logrus.Infof("Loaded %d initialization commands from: %s", len(commands), instructionPath)
-			request.InitCommands = commands
 		}
 
 		if err := internal.RunContainer(&request); err != nil {

@@ -39,10 +39,12 @@ const (
 
 	// 執行檔相關
 	DefaultCommand         = "/bin/sh"
-	BPFServiceExeHost      = "eBPF/ebpf-sched-monitor"
+	BPFServiceExeHost      = "ebpf-sched-monitor"
 	BPFServiceExeContainer = "/usr/bin/ebpf-sched-monitor"
 	BPFServiceOutputLog    = "/var/log/ebpf-sched-monitor.log"
 
 	// Initialization instructions file
 	DefaultInitInstructionFile = "Gockerfile"
+
+	SocketPath = "/var/run/gocker.sock"
 )
