@@ -2,7 +2,8 @@
 package cmd
 
 import (
-	"gocker/internal/image"
+	"gocker/internal/api"
+	"gocker/internal/types"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -14,13 +15,19 @@ var pullCommand = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		imageName := args[0]
-		logrus.Infof("正在拉取映像: %s", imageName)
-		manager := image.NewManager()
-		if err := manager.PullImage(imageName); err != nil {
-			logrus.Fatalf("拉取映像 %s 失敗: %v", imageName, err)
+		req := types.Request{
+			Command: "pull",
+			Payload: []byte(imageName),
+		}
+		res, err := api.SendRequest(req)
+		if err != nil {
+			logrus.Fatalf("與 gocker-daemon 通訊失敗: %v", err)
+		}
+		if res.Status != "success" {
+			logrus.Fatalf("來自 Daemon 的錯誤: %s", res.Message)
 		}
 
-		logrus.Infof("成功拉取並儲存映像: %s", imageName)
+		logrus.Infof("成功拉取映像: %s", imageName)
 	},
 }
 

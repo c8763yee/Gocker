@@ -48,6 +48,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 			res = s.handlePs()
 		case "start":
 			res = s.handleStart(req.Payload)
+		case "images":
+			res = s.handleImages()
+		case "pull":
+			res = s.handlePull(req.Payload)
 		default:
 			res = types.Response{Status: "error", Message: "未知的命令: " + req.Command}
 		}
@@ -185,4 +189,32 @@ func (s *Server) handleStart(payload json.RawMessage) types.Response {
 	}
 
 	return types.Response{Status: "success", Message: "成功啟動容器: " + startReq.ContainerID}
+}
+
+// handleImages 負責處理 "images" 命令
+func (s *Server) handleImages() types.Response {
+	images, err := s.ImageManager.ListImages()
+	if err != nil {
+		return types.Response{Status: "error", Message: "獲取映像檔列表失敗: " + err.Error()}
+	}
+
+	data, err := json.Marshal(images)
+	if err != nil {
+		return types.Response{Status: "error", Message: "序列化映像檔列表失敗: " + err.Error()}
+	}
+
+	return types.Response{Status: "success", Data: data}
+}
+
+// handlePull 負責處理 "pull" 命令
+func (s *Server) handlePull(payload json.RawMessage) types.Response {
+	var imageName string
+	if err := json.Unmarshal(payload, &imageName); err != nil {
+		return types.Response{Status: "error", Message: "解析 pull 請求的 payload 失敗: " + err.Error()}
+	}
+
+	if err := s.ImageManager.PullImage(imageName); err != nil {
+		return types.Response{Status: "error", Message: "拉取映像失敗: " + err.Error()}
+	}
+	return types.Response{Status: "success", Message: "成功拉取映像: " + imageName}
 }
