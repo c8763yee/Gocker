@@ -1,6 +1,11 @@
 // cmd/pf_exporter/main.go
 // go 1.22+
 // 需要 root 或 CAP_BPF+CAP_PERFMON+CAP_SYS_ADMIN（最簡單 sudo 跑）
+// 功能：
+// 1️⃣ 載入 pf.bpf.o (CO-RE eBPF 程式)
+// 2️⃣ 將 page_fault_user/kernel tracepoint 事件送進 ringbuf
+// 3️⃣ 讀取 ringbuf，轉成 Prometheus counter 暴露於 :2112/metrics
+// 4️⃣ 只監控 cgroup /sys/fs/cgroup/gocker 子樹內的事件
 
 package main
 
@@ -24,20 +29,21 @@ import (
 )
 
 const (
-	cgroupRootDefault = "/sys/fs/cgroup"
-	gockerPathDefault = "/sys/fs/cgroup/gocker"
-	bpfObjDefault     = "bpf/pf.bpf.o" // 可用環境變數 BPF_OBJ 覆寫
+	cgroupRootDefault = "/sys/fs/cgroup"        // cgroup v2 的 root mount point
+	gockerPathDefault = "/sys/fs/cgroup/gocker" // 你自定義的 gocker cgroup 根
+	bpfObjDefault     = "bpf/pf.bpf.o"          // eBPF ELF 檔位置，可由環境變數 BPF_OBJ 覆寫
 )
 
 type event struct {
-	TsNS     uint64
-	Type     uint32
-	Pid      uint32
-	Tgid     uint32
-	CgroupID uint64
-	Comm     [16]byte
+	TsNS     uint64   // 時間戳 (ns)
+	Type     uint32   // 事件類型 (1=user, 2=kernel)
+	Pid      uint32   // pid
+	Tgid     uint32   // tgid
+	CgroupID uint64   // 所屬 cgroup id
+	Comm     [16]byte // 程式名稱(comm)
 }
 
+// Prometheus Counter
 var (
 	pageFaults = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -48,6 +54,7 @@ var (
 	)
 )
 
+// 檢查是否為 cgroup v2
 func isUnifiedCgroupV2(root string) bool {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(root, &st); err != nil {
@@ -57,6 +64,7 @@ func isUnifiedCgroupV2(root string) bool {
 	return st.Type == CGROUP2_SUPER_MAGIC
 }
 
+// 取得指定 cgroup 目錄的 inode（作為 cgroup_id）
 func cgroupInode(path string) (uint64, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -69,6 +77,7 @@ func cgroupInode(path string) (uint64, error) {
 	return uint64(st.Ino), nil
 }
 
+// 算出目標 cgroup 距離 root 的層級深度（給 bpf_get_current_ancestor_cgroup_id 使用）
 func cgroupLevel(root, path string) (uint32, error) {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
@@ -87,6 +96,7 @@ func cgroupLevel(root, path string) (uint32, error) {
 	return uint32(n), nil
 }
 
+// 將事件類型轉為字串 label
 func labelType(t uint32) string {
 	switch t {
 	case 1:
@@ -99,16 +109,21 @@ func labelType(t uint32) string {
 }
 
 func main() {
+	// --- 初始化 Prometheus counter ---
 	prometheus.MustRegister(pageFaults)
 
+	// --- 讀取環境變數（若未指定就使用預設值） ---
 	cgroupRoot := getenv("CGROUP_ROOT", cgroupRootDefault)
 	targetPath := getenv("PF_TARGET_CGROUP", gockerPathDefault)
 	bpfObjPath := getenv("BPF_OBJ", bpfObjDefault)
 	sampleRate := getenvUint("PF_SAMPLE_RATE", 1)
 
+	// --- 檢查 cgroup v2 環境 ---
 	if !isUnifiedCgroupV2(cgroupRoot) {
 		log.Fatalf("require cgroup v2 unified mount at %s", cgroupRoot)
 	}
+
+	// --- 取得 gocker 的 inode (cgroup_id) + 層級 ---
 	targetID, err := cgroupInode(targetPath)
 	if err != nil {
 		log.Fatalf("stat %s: %v", targetPath, err)
@@ -120,7 +135,7 @@ func main() {
 	log.Printf("Filter subtree: %s (inode=%d, level=%d), sample_rate=%d",
 		targetPath, targetID, level, sampleRate)
 
-	// 讀取 BPF ELF
+	// --- 載入 eBPF ELF 物件檔 ---
 	bpfBytes, err := os.ReadFile(bpfObjPath)
 	if err != nil {
 		log.Fatalf("read BPF obj: %v", err)
@@ -130,7 +145,7 @@ func main() {
 		log.Fatalf("load spec: %v", err)
 	}
 
-	// 覆寫 .rodata 常數
+	// --- 透過 RewriteConstants 設定 eBPF 全域常數 ---
 	if err := spec.RewriteConstants(map[string]interface{}{
 		"SAMPLE_RATE":   uint32(sampleRate),
 		"ENABLE_FILTER": uint32(1),
@@ -140,7 +155,7 @@ func main() {
 		log.Fatalf("rewrite consts: %v", err)
 	}
 
-	// 載入並繫結 maps/programs
+	// --- 載入 eBPF programs/maps 到 kernel ---
 	var objs struct {
 		Programs struct {
 			TpPageFaultUser   *ebpf.Program `ebpf:"tp_page_fault_user"`
@@ -177,20 +192,20 @@ func main() {
 	}
 	defer rb.Close()
 
-	// /metrics
+	// --- 啟動 Prometheus /metrics HTTP server ---
 	http.Handle("/metrics", promhttp.Handler())
 	go func() {
 		log.Printf("Prometheus metrics on :2112/metrics")
 		log.Fatal(http.ListenAndServe(":2112", nil))
 	}()
 
-	log.Printf("Reading ring buffer…")
+	// --- 讀取 ringbuf 事件 ---
 	log.Printf("Reading ring buffer…")
 	for {
 		rec, err := rb.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
-				return
+				return //結束
 			}
 			// 例如 EAGAIN/EINTR 等，略過重試
 			continue
@@ -205,10 +220,12 @@ func main() {
 			continue
 		}
 
+		// 將 eBPF event 轉成 Prometheus counter
 		pageFaults.WithLabelValues(labelType(e.Type), fmt.Sprintf("%d", e.CgroupID)).Inc()
 	}
 }
 
+// --- 環境變數讀取輔助 ---
 func getenv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

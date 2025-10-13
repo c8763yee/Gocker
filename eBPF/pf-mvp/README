@@ -1,0 +1,32 @@
+# pf-mvp (gocker subtree)
+
+## 先決條件
+- Linux + cgroup v2（/sys/fs/cgroup 為 cgroup2）
+- root 權限（或 CAP_BPF + CAP_PERFMON + CAP_SYS_ADMIN）
+- clang/llvm、bpftool、kernel BTF 可用（/sys/kernel/btf/vmlinux）
+
+## 建置
+```bash
+# 編譯 eBPF 物件檔
+sudo apt-get update
+sudo apt-get install -y clang llvm bpftool linux-headers-$(uname -r)
+make -C bpf
+# 會產生：bpf/pf.bpf.o（以及 vmlinux.h）
+
+## 編譯並啟動 Go Exporter
+go mod tidy
+go build -o pf_exporter ./cmd/pf_exporter
+
+# 只監控 gocker 子樹；抽樣率 1 = 全收
+sudo PF_TARGET_CGROUP=/sys/fs/cgroup/gocker PF_SAMPLE_RATE=1 ./pf_exporter
+
+
+
+
+# 另開一個終端檢查
+curl -s localhost:2112/metrics | grep page_faults_total
+
+# 起監控三件組
+docker compose up -d
+# Grafana -> 新增 Prometheus 資料來源 -> 新建面板：
+#   Query: rate(page_faults_total[1m])
