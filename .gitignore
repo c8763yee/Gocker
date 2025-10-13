@@ -33,3 +33,10 @@ go.work.sum
 
 alpine-rootfs
 ebpf-sched-monitor
+gocker
+gocker-daemon
+
+!cmd/gocker
+!cmd/gocker-daemon
+
+.ccls-cache
