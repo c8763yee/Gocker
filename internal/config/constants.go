@@ -30,7 +30,7 @@ const (
 
 	// 資源限制 (可在未來改為可配置)
 	DefaultCPULimit    = 1                 // 1 core CPU
-	DefaultMemoryLimit = 100 * 1024 * 1024 // 100MB Memory
+	DefaultMemoryLimit = 200 * 1024 * 1024 // 100MB Memory
 	DefaultPidsLimit   = 100               // 100 processes
 	InvalidLimit       = -1
 
