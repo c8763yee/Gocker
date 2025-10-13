@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/sirupsen/logrus"
 
 	"gocker/internal/config"
@@ -24,6 +26,12 @@ import (
 // Manager 負責所有容器的生命週期管理
 type Manager struct {
 	StoragePath string
+}
+
+type StartOptions struct {
+	Attach bool
+	Tty    bool
+	Conn   io.ReadWriteCloser
 }
 
 // NewManager 建立一個新的容器管理器
@@ -305,7 +313,7 @@ func findContainerInfo(identifier string) (*types.ContainerInfo, error) {
 
 	return nil, fmt.Errorf("找不到容器: %s", identifier)
 }
-func (m *Manager) Start(identifier string) error {
+func (m *Manager) Start(identifier string, opts *StartOptions) error {
 	// 1. 查找容器並獲取其資訊
 	info, err := findContainerInfo(identifier)
 	if err != nil {
@@ -336,15 +344,54 @@ func (m *Manager) Start(identifier string) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET,
 	}
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	cmd.ExtraFiles = []*os.File{readPipe}
 
 	// 4. 啟動子行程
-	if err := cmd.Start(); err != nil {
+	attach := opts != nil && opts.Attach
+	useTTY := attach && opts.Tty
+
+	if attach && opts.Conn == nil {
 		readPipe.Close()
-		return fmt.Errorf("啟動子行程失敗: %w", err)
+		return fmt.Errorf("attach needs a valid connection")
+	}
+
+	var (
+		ptmx    *os.File
+		ttyDone chan struct{}
+	)
+
+	if useTTY {
+		ptmx, err = pty.Start(cmd)
+		if err != nil {
+			readPipe.Close()
+			return fmt.Errorf("cannot start subprocess (TTY mode): %w", err)
+		}
+
+		ttyDone = make(chan struct{})
+		go func() {
+			_, _ = io.Copy(opts.Conn, ptmx)
+			close(ttyDone)
+		}()
+		go func() {
+			_, _ = io.Copy(ptmx, opts.Conn)
+		}()
+	} else {
+		if attach {
+			cmd.Stdin = opts.Conn
+			cmd.Stdout = opts.Conn
+			cmd.Stderr = opts.Conn
+		} else {
+			// gocker-daemon will call this, so detach from terminal
+			// set stdin/stdout/stderr to nil
+			cmd.Stdin = nil
+			cmd.Stdout = nil
+			cmd.Stderr = nil
+		}
+
+		if err := cmd.Start(); err != nil {
+			readPipe.Close()
+			return fmt.Errorf("error starting subprocess: %w", err)
+		}
 	}
 	readPipe.Close()
 
@@ -355,6 +402,9 @@ func (m *Manager) Start(identifier string) error {
 	peerName, err := network.SetupVeth(newPid)
 	if err != nil {
 		_ = cmd.Process.Kill()
+		if ptmx != nil {
+			_ = ptmx.Close()
+		}
 		return fmt.Errorf("設定容器網路失敗: %w", err)
 	}
 
@@ -366,6 +416,9 @@ func (m *Manager) Start(identifier string) error {
 	allocatedIP, err := network.AllocateContainerIP(info.ID, desiredIP)
 	if err != nil {
 		_ = cmd.Process.Kill()
+		if ptmx != nil {
+			_ = ptmx.Close()
+		}
 		return fmt.Errorf("cannot allocate container IP: %w", err)
 	}
 
@@ -398,6 +451,9 @@ func (m *Manager) Start(identifier string) error {
 	encoder := json.NewEncoder(writePipe)
 	if err := encoder.Encode(req); err != nil {
 		_ = cmd.Process.Kill()
+		if ptmx != nil {
+			_ = ptmx.Close()
+		}
 		log.Errorf("向管道寫入配置失敗: %v", err)
 		return fmt.Errorf("向子行程傳遞設定失敗: %w", err)
 	}
@@ -416,11 +472,21 @@ func (m *Manager) Start(identifier string) error {
 	cgroupPath, err := m.SetupCgroup(info.Limits, newPid, info.ID)
 	if err != nil {
 		_ = cmd.Process.Kill()
+		if ptmx != nil {
+			_ = ptmx.Close()
+		}
 		return fmt.Errorf("設定 cgroup 失敗: %w", err)
 	}
 
 	// 9. 等待容器結束
 	_ = cmd.Wait()
+
+	if ptmx != nil {
+		_ = ptmx.Close()
+		if ttyDone != nil {
+			<-ttyDone
+		}
+	}
 
 	// 10. 容器再次停止後，更新最終狀態
 	log.Info("容器已退出")

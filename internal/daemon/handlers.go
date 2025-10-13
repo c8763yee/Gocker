@@ -4,6 +4,7 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"gocker/internal/container"
 	"gocker/internal/types"
 	"io"
 	"log"
@@ -47,7 +48,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 		case "ps":
 			res = s.handlePs()
 		case "start":
-			res = s.handleStart(req.Payload)
+			var handled bool
+			res, handled = s.handleStart(req.Payload, conn)
+			if handled {
+				return
+			}
 		case "images":
 			res = s.handleImages()
 		case "pull":
@@ -175,20 +180,32 @@ func (s *Server) handleExec(payload json.RawMessage, conn net.Conn) {
 }
 
 // handleStart 負責處理 "start" 命令
-func (s *Server) handleStart(payload json.RawMessage) types.Response {
-	var startReq struct {
-		ContainerID string `json:"container_id"`
-	}
+func (s *Server) handleStart(payload json.RawMessage, conn net.Conn) (types.Response, bool) {
+	var startReq types.StartRequest
 
 	if err := json.Unmarshal(payload, &startReq); err != nil {
-		return types.Response{Status: "error", Message: "解析 start 請求的 payload 失敗: " + err.Error()}
+		return types.Response{Status: "error", Message: "解析 start 請求的 payload 失敗: " + err.Error()}, false
 	}
 
-	if err := s.ContainerManager.Start(startReq.ContainerID); err != nil {
-		return types.Response{Status: "error", Message: err.Error()}
+	if !startReq.Attach {
+		if err := s.ContainerManager.Start(startReq.ContainerID, nil); err != nil {
+			return types.Response{Status: "error", Message: err.Error()}, false
+		}
+		return types.Response{Status: "success", Message: "container has been started successfully: " + startReq.ContainerID}, false
 	}
 
-	return types.Response{Status: "success", Message: "成功啟動容器: " + startReq.ContainerID}
+	opts := &container.StartOptions{
+		Attach: true,
+		Tty:    startReq.Tty,
+		Conn:   conn,
+	}
+
+	if err := s.ContainerManager.Start(startReq.ContainerID, opts); err != nil {
+		log.Printf("cannot start container %s and attach terminal: %v", startReq.ContainerID, err)
+		_, _ = fmt.Fprintf(conn, "failed to start container: %v\n", err)
+	}
+
+	return types.Response{}, true
 }
 
 // handleImages 負責處理 "images" 命令

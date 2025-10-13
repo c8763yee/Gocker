@@ -74,3 +74,9 @@ type ExecRequest struct {
 	Command     []string `json:"command"`      // 要執行的命令及其參數
 	Tty         bool     `json:"tty"`          // 是否分配 TTY
 }
+
+type StartRequest struct {
+	ContainerID string `json:"container_id"`
+	Attach      bool   `json:"attach"`
+	Tty         bool   `json:"tty"`
+}
