@@ -3,6 +3,7 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -44,7 +45,32 @@ Use double dashes (--) if you want to pass arguments to the command. like 'gocke
 				request.ContainerArgs = args[2:]
 			}
 		}
+		/*
+		 * Initial file name is "Gockerfile" by default
+		 * User can override it by --init-file flag
+		 * If the specified file does not exist, we will skip the initialization step
+		 * If the file is specified but does not exist, we will exit with error
+		 * If the file is not specified and does not exist, we will skip the initialization step
+		 * If the file exists, we will read the commands from the file and pass it to the container
+		 * The commands will be executed in the container before the main command
+		 */
+		instructionPath := initInstructionFile
 
+		logrus.Debugf("Initialization instructions file: %s", instructionPath)
+		commands, err := loadInitCommands(instructionPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				if initInstructionFile != "" {
+					logrus.Fatalf("Sorry, the file you specified does not exist: %s", instructionPath)
+				}
+				logrus.Debugf("Cannot find initialization instructions file %s, skipping initialization step", instructionPath)
+			} else {
+				logrus.Fatalf("Failed to read initialization instructions file: %v", err)
+			}
+		} else if len(commands) > 0 {
+			logrus.Infof("Loaded %d initialization commands from: %s", len(commands), instructionPath)
+			request.InitCommands = commands
+		}
 		if err := internal.RunContainer(&request); err != nil {
 			logrus.Fatalf("Failed to run container: %v", err)
 		}
@@ -57,7 +83,7 @@ func init() {
 	runCommand.Flags().IntVarP(&request.MemoryLimit, "memory", "m", config.DefaultMemoryLimit, "Limit the memory")
 	runCommand.Flags().IntVar(&request.CPULimit, "cpus", config.DefaultCPULimit, "Limit the number of CPUs")
 	runCommand.Flags().StringVar(&request.RequestedIP, "ip", "", "Request a specific IPv4 address for the container")
-	runCommand.Flags().StringVar(&initInstructionFile, "init-file", "", fmt.Sprintf("Path to initialization instructions file (default %s)",
+	runCommand.Flags().StringVar(&initInstructionFile, "init-file", config.DefaultInitInstructionFile, fmt.Sprintf("Path to initialization instructions file (default %s)",
 		config.DefaultInitInstructionFile))
 	rootCmd.AddCommand(runCommand)
 }
