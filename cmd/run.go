@@ -3,6 +3,7 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -44,7 +45,30 @@ Use double dashes (--) if you want to pass arguments to the command. like 'gocke
 				request.ContainerArgs = args[2:]
 			}
 		}
-
+		/*
+		 * Initial file name is "Gockerfile" by default
+		 * User can override it by --init-file flag
+		 * If the specified file does not exist, we will skip the initialization step
+		 * If the file is specified but does not exist, we will exit with error
+		 * If the file is not specified and does not exist, we will skip the initialization step
+		 * If the file exists, we will read the commands from the file and pass it to the container
+		 * The commands will be executed in the container before the main command
+		 */
+		instructionPath := initInstructionFile
+		if instructionPath != "" {
+			logrus.Debugf("Initialization instructions file: %s", instructionPath)
+			commands, err := loadInitCommands(instructionPath)
+			if err == nil && len(commands) > 0 {
+				logrus.Infof("Loaded %d initialization commands from: %s", len(commands), instructionPath)
+				request.InitCommands = commands
+			} else if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					logrus.Infof("Cannot find initialization instructions file %s, skipping initialization step", instructionPath)
+				} else {
+					logrus.Fatalf("Failed to read initialization instructions file: %v", err)
+				}
+			}
+		}
 		if err := internal.RunContainer(&request); err != nil {
 			logrus.Fatalf("Failed to run container: %v", err)
 		}
