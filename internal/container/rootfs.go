@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"gocker/internal/config"
 	"gocker/internal/types"
+	"gocker/pkg"
 
 	"github.com/sirupsen/logrus"
 )
@@ -68,33 +70,33 @@ func SetupRootfs(mountPoint string, imageName, imageTag string) error {
 	}
 
 	// 4.1 複製eBPF 監控服務檔案到容器目錄
-	// 目前還有錯誤 無法解決，暫時註解掉
-	// srcPath := config.BPFServiceExeHost
-	// exe, err := pkg.GetSelfExecutablePath()
-	// if err != nil {
-	// 	log.Warnf("無法獲取執行檔路徑, 使用當前目錄: %v", err)
-	// 	exe = os.Getenv("PWD")
-	// }
-	// srcPath := filepath.Join(filepath.Dir(exe), config.BPFServiceExeHost)
-	// dstPath := filepath.Join(mountPoint, config.BPFServiceExeContainer)
-	// log.Debugf("正在複製 eBPF 監控服務檔案到容器: %s -> %s", srcPath, dstPath)
-	// os.MkdirAll(filepath.Dir(dstPath), 0755)
+	srcPath := config.BPFServiceExeHost
+	dstPath := filepath.Join(mountPoint, config.BPFServiceExeContainer)
 
-	// src, err := os.Open(srcPath)
-	// if err != nil {
-	// 	return fmt.Errorf("無法開啟 eBPF 監控服務檔案: %w", err)
-	// }
-	// defer src.Close()
+	exe, err := pkg.GetSelfExecutablePath()
+	if err != nil {
+		log.Warnf("無法獲取執行檔路徑, 使用當前目錄: %v", err)
+		exe = os.Getenv("PWD")
+	}
+	srcPath = filepath.Join(filepath.Dir(exe), config.BPFServiceExeHost)
+	log.Infof("正在複製 eBPF 監控服務檔案到容器: %s -> %s", srcPath, dstPath)
+	os.MkdirAll(filepath.Dir(dstPath), 0755)
 
-	// dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-	// if err != nil {
-	// 	return fmt.Errorf("無法建立容器內的 eBPF 監控服務檔案: %w", err)
-	// }
-	// defer dst.Close()
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("無法開啟 eBPF 監控服務檔案: %w", err)
+	}
+	defer src.Close()
 
-	// if _, err := io.Copy(dst, src); err != nil {
-	// 	return fmt.Errorf("無法複製 eBPF 監控服務檔案: %w", err)
-	// }
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return fmt.Errorf("無法建立容器內的 eBPF 監控服務檔案: %w", err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("無法複製 eBPF 監控服務檔案: %w", err)
+	}
 
 	// 5. 執行 pivot_root 將根目錄切換到 mountPoint
 	if err := PivotRoot(mountPoint); err != nil {

@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -169,7 +168,7 @@ func (m *Manager) CreateAndRun(req *types.RunRequest) (string, error) {
 }
 func (m *Manager) StopContainer(identifier string) error {
 	// 1. 查找容器資訊
-	info, err := findContainerInfo(identifier)
+	info, err := m.GetInfo(identifier)
 	if err != nil {
 		return err
 	}
@@ -306,10 +305,9 @@ func findContainerInfo(identifier string) (*types.ContainerInfo, error) {
 
 	return nil, fmt.Errorf("找不到容器: %s", identifier)
 }
-
 func (m *Manager) Start(identifier string) error {
-	// 1. 查找容器並獲取其詳細資訊
-	info, err := m.GetInfo(identifier)
+	// 1. 查找容器並獲取其資訊
+	info, err := findContainerInfo(identifier)
 	if err != nil {
 		return err
 	}
@@ -322,74 +320,37 @@ func (m *Manager) Start(identifier string) error {
 		return fmt.Errorf("無法啟動狀態為 %s 的容器", info.Status)
 	}
 
-	log := logrus.WithFields(logrus.Fields{
-		"containerID": info.ID,
-		"name":        info.Name,
-	})
-	log.Info("Daemon: 準備啟動已停止的容器...")
+	// 3. 準備重新啟動子行程
+	log := logrus.WithField("containerID", info.ID)
 
-	// 3. 從儲存的 ContainerInfo 中重建 RunRequest 傳遞給子行程
-	imageParts := strings.Split(info.Image, ":")
-	imageName := imageParts[0]
-	imageTag := "latest"
-	if len(imageParts) > 1 {
-		imageTag = imageParts[1]
-	}
-
-	cmdParts := strings.Fields(info.Command)
-	var command string
-	var args []string
-	if len(cmdParts) > 0 {
-		command = cmdParts[0]
-	}
-	if len(cmdParts) > 1 {
-		args = cmdParts[1:]
-	}
-
-	req := &types.RunRequest{
-		ImageName:        imageName,
-		ImageTag:         imageTag,
-		ContainerName:    info.Name,
-		ContainerCommand: command,
-		ContainerArgs:    args,
-		MountPoint:       info.MountPoint,
-		ContainerLimits:  info.Limits,
-	}
-
-	// 4. 除錯日誌的準備
-	containerDir := filepath.Dir(info.MountPoint)
-	initLogPath := filepath.Join(containerDir, "init.log")
-	initLogFile, err := os.OpenFile(initLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	// 準備pipe
+	readPipe, writePipe, err := os.Pipe()
 	if err != nil {
-		return fmt.Errorf("無法建立 init 日誌檔案 %s: %w", initLogPath, err)
+		return fmt.Errorf("建立管道失敗: %w", err)
 	}
+	defer writePipe.Close()
 
-	// 5. 準備啟動子行程的命令
-	readPipe, writePipe, _ := os.Pipe()
-	cmd := exec.Command("/proc/self/exe", "init")
+	// 準備command
+	selfPath, _ := os.Executable()
+	cmd := exec.Command(selfPath, "init")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET,
 	}
-	cmd.Dir = "/"
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.ExtraFiles = []*os.File{readPipe}
-	cmd.Stdout = initLogFile
-	cmd.Stderr = initLogFile
 
-	// 6. 啟動子行程
+	// 4. 啟動子行程
 	if err := cmd.Start(); err != nil {
-		_ = initLogFile.Close()
+		readPipe.Close()
 		return fmt.Errorf("啟動子行程失敗: %w", err)
 	}
-	childPid := cmd.Process.Pid
-	log.Infof("Daemon: 子行程已啟動，PID 為 %d", childPid)
+	readPipe.Close()
 
-	// 7. 重新設定 Cgroup 和網路
-	cgroupPath, _ := m.SetupCgroup(req.ContainerLimits, childPid, info.ID)
-	peerName, _ := network.SetupVeth(childPid)
-	req.VethPeerName = peerName
+	newPid := cmd.Process.Pid
+	log.Infof("容器已重新啟動，新的 PID 為 %d", newPid)
 
-	// 8. 將配置寫入管道
-	if err := json.NewEncoder(writePipe).Encode(req); err != nil {
 	// 5. 設定網路
 	peerName, err := network.SetupVeth(newPid)
 	if err != nil {
@@ -437,63 +398,43 @@ func (m *Manager) Start(identifier string) error {
 	encoder := json.NewEncoder(writePipe)
 	if err := encoder.Encode(req); err != nil {
 		_ = cmd.Process.Kill()
+		log.Errorf("向管道寫入配置失敗: %v", err)
 		return fmt.Errorf("向子行程傳遞設定失敗: %w", err)
 	}
-	_ = writePipe.Close()
+	writePipe.Close()
 
-	// 9. 更新狀態為 Running
-	info.PID = childPid
+	// 7. 更新 config.json 狀態
+	info.PID = newPid
 	info.Status = types.Running
+	info.FinishedAt = time.Time{}
+	containerDir := filepath.Join(m.StoragePath, info.ID)
+	if err := pkg.WriteContainerInfo(containerDir, info); err != nil {
+		log.Warnf("更新容器狀態為 Running 失敗: %v", err)
+	}
+
+	// 8. 設定資源限制
+	cgroupPath, err := m.SetupCgroup(info.Limits, newPid, info.ID)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("設定 cgroup 失敗: %w", err)
+	}
+
+	// 9. 等待容器結束
+	_ = cmd.Wait()
+
+	// 10. 容器再次停止後，更新最終狀態
+	log.Info("容器已退出")
+	info.PID = 0
+	info.Status = types.Stopped
+	info.FinishedAt = time.Now()
 	_ = pkg.WriteContainerInfo(containerDir, info)
 
-	go func() {
-		defer func() {
-			_ = initLogFile.Close()
-			_ = readPipe.Close()
-			log.Infof("Daemon: 容器 %s 已退出", info.Name)
-
-			info.PID = 0
-			info.Status = types.Stopped
-			info.FinishedAt = time.Now()
-			_ = pkg.WriteContainerInfo(containerDir, info)
-
-			// 清理 cgroup
-			_ = m.CleanupCgroup(cgroupPath)
-		}()
-		_ = cmd.Wait()
-	}()
+	// 11. 清理資源
+	_ = m.CleanupCgroup(cgroupPath)
 
 	return nil
 }
 
-func (m *Manager) GetInfo(idOrName string) (*types.ContainerInfo, error) {
-	entries, err := os.ReadDir(config.ContainerStoragePath)
-	if err != nil {
-		return nil, fmt.Errorf("讀取容器儲存目錄失敗: %w", err)
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		containerID := entry.Name()
-		configFilePath := filepath.Join(config.ContainerStoragePath, containerID, "config.json")
-
-		content, err := os.ReadFile(configFilePath)
-		if err != nil {
-			continue
-		}
-
-		var info types.ContainerInfo
-		if err := json.Unmarshal(content, &info); err != nil {
-			logrus.Warnf("警告：解析 config.json 失敗 (容器ID: %s): %v", containerID, err)
-			continue
-		}
-
-		if info.ID == idOrName || info.Name == idOrName {
-			return &info, nil
-		}
-	}
-
-	return nil, fmt.Errorf("找不到名為或 ID 為 '%s' 的容器", idOrName)
+func (m *Manager) GetInfo(identifier string) (*types.ContainerInfo, error) {
+	return findContainerInfo(identifier)
 }

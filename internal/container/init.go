@@ -49,7 +49,7 @@ func InitContainer() error {
 	}
 
 	// 5. 在容器內部設定網路
-	if err := network.ConfigureContainerNetwork(req.VethPeerName); err != nil {
+	if err := network.ConfigureContainerNetwork(req.VethPeerName, req.IPAddress); err != nil {
 		return fmt.Errorf("子行程: 設定容器網路失敗: %w", err)
 	}
 	log.Info("子行程: 容器內網路設定完成")
