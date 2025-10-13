@@ -8,6 +8,7 @@ import (
 
 	"gocker/internal/config"
 
+	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 )
 
@@ -23,10 +24,10 @@ type IPTablesRule struct {
 func SetupBridge() error {
 	// 檢查Bridge是否已存在
 	if bridge, err := netlink.LinkByName(config.BridgeName); err == nil {
-		fmt.Printf("Bridge '%s' 已經存在\n", config.BridgeName)
 		return ensureBridgeIP(bridge)
 	}
 
+	logrus.Infof("Bridge '%s' 不存在，開始建立...", config.BridgeName)
 	// 建立新的Bridge
 	if err := createBridge(); err != nil {
 		return fmt.Errorf("建立Bridge失敗: %v", err)
