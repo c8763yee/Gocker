@@ -208,13 +208,13 @@ func (s *Server) handleImages() types.Response {
 
 // handlePull 負責處理 "pull" 命令
 func (s *Server) handlePull(payload json.RawMessage) types.Response {
-	var imageName string
+	var imageName types.PullRequest
 	if err := json.Unmarshal(payload, &imageName); err != nil {
 		return types.Response{Status: "error", Message: "解析 pull 請求的 payload 失敗: " + err.Error()}
 	}
 
-	if err := s.ImageManager.PullImage(imageName); err != nil {
+	if err := s.ImageManager.PullImage(imageName.Image); err != nil {
 		return types.Response{Status: "error", Message: "拉取映像失敗: " + err.Error()}
 	}
-	return types.Response{Status: "success", Message: "成功拉取映像: " + imageName}
+	return types.Response{Status: "success", Message: "成功拉取映像: " + imageName.Image}
 }

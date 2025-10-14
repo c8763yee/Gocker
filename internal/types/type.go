@@ -74,3 +74,7 @@ type ExecRequest struct {
 	Command     []string `json:"command"`      // 要執行的命令及其參數
 	Tty         bool     `json:"tty"`          // 是否分配 TTY
 }
+
+type PullRequest struct {
+	Image string `json:"image"` // 例如 "alpine:latest"
+}
