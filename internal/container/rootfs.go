@@ -222,7 +222,9 @@ func checkFSType(mountPoint, fstype string) bool {
 		return false
 	}
 
-	for line := range strings.SplitSeq(string(data), "\n") {
+	// this line of code is only support for go 1.23+
+	// for line := range strings.SplitSeq(string(data), "\n") {
+	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 3 && fields[1] == mountPoint {
 			if fields[2] != fstype {
