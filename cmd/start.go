@@ -4,7 +4,6 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -12,11 +11,11 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
 	"gocker/internal/config"
 	"gocker/internal/types"
+	"gocker/internal/tty"
 )
 
 var (
@@ -105,7 +104,7 @@ var startCommand = &cobra.Command{
 		stdinDone := make(chan struct{})
 		go func() {
 			defer close(stdinDone)
-			copyInputUntilClosed(conn, os.Stdin, done)
+			tty.CopyInputUntilClosed(conn, os.Stdin, done)
 		}()
 
 		<-done
@@ -126,76 +125,4 @@ func init() {
 	rootCmd.AddCommand(startCommand)
 	startCommand.Flags().BoolVarP(&startAttach, "attach", "a", true, "attach container's STDIN/STDOUT/STDERR")
 	startCommand.Flags().BoolVarP(&startAllocateTTY, "tty", "t", true, "allocate a pseudo-TTY for the start command")
-}
-
-// who TF put this pile of shit function here?
-// consider moving it to a more appropriate location
-func copyInputUntilClosed(dst io.Writer, stdin *os.File, done <-chan struct{}) {
-	fd := int(stdin.Fd())
-	buf := make([]byte, 32*1024)
-
-	for {
-		select {
-		case <-done:
-			return
-		default:
-		}
-
-		pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
-		if _, err := unix.Poll(pollFds, 200); err != nil {
-			if errors.Is(err, unix.EINTR) {
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "something went wrong while polling stdin: %v\n", err)
-			return
-		}
-
-		revents := pollFds[0].Revents
-		if revents&(unix.POLLHUP|unix.POLLERR|unix.POLLNVAL) != 0 {
-			return
-		}
-
-		if revents&unix.POLLIN == 0 {
-			continue
-		}
-
-		n, err := unix.Read(fd, buf)
-		if n > 0 {
-			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
-				if !isBrokenPipe(writeErr) {
-					fmt.Fprintf(os.Stderr, "something went wrong while writing container input: %v\n", writeErr)
-				}
-				return
-			}
-		}
-
-		if err != nil {
-			switch {
-			case errors.Is(err, unix.EINTR), errors.Is(err, unix.EAGAIN):
-				continue
-			case errors.Is(err, io.EOF):
-				return
-			default:
-				fmt.Fprintf(os.Stderr, "read stdin failed: %v\n", err)
-				return
-			}
-		}
-	}
-}
-
-func isBrokenPipe(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	if errors.Is(err, net.ErrClosed) || errors.Is(err, os.ErrClosed) || errors.Is(err, unix.EPIPE) {
-		return true
-	}
-
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
-		return isBrokenPipe(opErr.Err)
-	}
-
-	return false
 }
