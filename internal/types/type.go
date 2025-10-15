@@ -75,6 +75,12 @@ type ExecRequest struct {
 	Tty         bool     `json:"tty"`          // 是否分配 TTY
 }
 
+type StartRequest struct {
+	ContainerID string `json:"container_id"`
+	Attach      bool   `json:"attach"`
+	Tty         bool   `json:"tty"`
+}
+
 type PullRequest struct {
 	Image string `json:"image"` // 例如 "alpine:latest"
 }

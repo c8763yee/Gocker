@@ -3,16 +3,25 @@ package cmd
 
 import (
 	"encoding/json"
-	"gocker/internal/api"
-	"gocker/internal/types"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"sync"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
+
+	"gocker/internal/config"
+	"gocker/internal/types"
+	"gocker/internal/tty"
 )
 
-type StartRequest struct {
-	ContainerID string `json:"container_id"`
-}
+var (
+	startAttach      bool
+	startAllocateTTY bool
+)
 
 var startCommand = &cobra.Command{
 	Use:   "start CONTAINER",
@@ -22,7 +31,27 @@ var startCommand = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		containerIdentifier := args[0]
 
-		payload, err := json.Marshal(StartRequest{ContainerID: containerIdentifier})
+		conn, err := net.Dial("unix", config.SocketPath)
+		if err != nil {
+			logrus.Fatalf("cannot connect to gocker-daemon: %v", err)
+		}
+		defer conn.Close()
+
+		attach := startAttach
+		allocateTTY := startAllocateTTY
+		stdinFD := int(os.Stdin.Fd())
+		if attach && allocateTTY && !term.IsTerminal(stdinFD) {
+			logrus.Warn("this terminal does not support TTY, automatically downgrading to non-TTY mode")
+			allocateTTY = false
+		}
+
+		startReq := types.StartRequest{
+			ContainerID: containerIdentifier,
+			Attach:      attach,
+			Tty:         allocateTTY,
+		}
+
+		payload, err := json.Marshal(startReq)
 		if err != nil {
 			logrus.Fatalf("序列化 start 請求失敗: %v", err)
 		}
@@ -32,19 +61,68 @@ var startCommand = &cobra.Command{
 			Payload: payload,
 		}
 
-		res, err := api.SendRequest(req)
-		if err != nil {
-			logrus.Fatalf("與 gocker-daemon 通訊失敗: %v", err)
+		if err := json.NewEncoder(conn).Encode(req); err != nil {
+			logrus.Fatalf("發送 start 請求失敗: %v", err)
 		}
 
-		if res.Status == "success" {
-			logrus.Info(res.Message)
-		} else {
-			logrus.Fatalf("來自 Daemon 的錯誤: %s", res.Message)
+		if !attach {
+			var res types.Response
+			if err := json.NewDecoder(conn).Decode(&res); err != nil {
+				logrus.Fatalf("cannot read start response: %v", err)
+			}
+			if res.Status == "success" {
+				logrus.Info(res.Message)
+			} else {
+				logrus.Fatalf("error from daemon: %s", res.Message)
+			}
+			return
 		}
+
+		if allocateTTY && term.IsTerminal(stdinFD) {
+			oldState, err := term.MakeRaw(stdinFD)
+			if err != nil {
+				logrus.Fatalf("something went wrong while setting terminal to raw mode: %v", err)
+			}
+			defer term.Restore(stdinFD, oldState)
+		}
+
+		var once sync.Once
+		done := make(chan struct{})
+		closeDone := func() {
+			once.Do(func() {
+				close(done)
+			})
+		}
+
+		go func() {
+			if _, err := io.Copy(os.Stdout, conn); err != nil && !errors.Is(err, io.EOF) {
+				logrus.WithError(err).Warn("something went wrong while reading container output")
+			}
+			closeDone()
+		}()
+
+		stdinDone := make(chan struct{})
+		go func() {
+			defer close(stdinDone)
+			tty.CopyInputUntilClosed(conn, os.Stdin, done)
+		}()
+
+		<-done
+
+		if unixConn, ok := conn.(*net.UnixConn); ok {
+			_ = unixConn.CloseRead()
+			_ = unixConn.CloseWrite()
+		}
+
+		<-stdinDone
+		logrus.Info("container has exited")
 	},
 }
 
 func init() {
+	startAttach = true
+	startAllocateTTY = true
 	rootCmd.AddCommand(startCommand)
+	startCommand.Flags().BoolVarP(&startAttach, "attach", "a", true, "attach container's STDIN/STDOUT/STDERR")
+	startCommand.Flags().BoolVarP(&startAllocateTTY, "tty", "t", true, "allocate a pseudo-TTY for the start command")
 }
