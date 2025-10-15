@@ -1,0 +1,80 @@
+{
+  "id": null,
+  "uid": "gocker-obsv-host",
+  "title": "Gocker eBPF Metrics (Host Mode)",
+  "tags": ["eBPF","Gocker","Linux"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "cgroup_id",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(page_faults_total, cgroup_id)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": ".*" }
+      }
+    ]
+  },
+  "panels": [
+    { "type": "row", "title": "Page Faults", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
+    {
+      "type": "timeseries",
+      "title": "Page Faults per Container (30s rate)",
+      "targets": [{ "expr": "rate(page_faults_total[30s])", "legendFormat": "{{cgroup_id}} ({{type}})" }],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "faults/s" } }
+    },
+    { "type": "row", "title": "Scheduler", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 } },
+    {
+      "type": "timeseries",
+      "title": "Sched Switch / Wakeup per Container",
+      "targets": [
+        { "expr": "rate(sched_events_total{type=\"switch\"}[30s])", "legendFormat": "{{cgroup_id}} switch" },
+        { "expr": "rate(sched_events_total{type=\"wakeup\"}[30s])", "legendFormat": "{{cgroup_id}} wakeup" }
+      ],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "events/s" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Scheduler Pressure (wakeup / switch)",
+      "targets": [{ "expr": "rate(sched_events_total{type=\"wakeup\"}[30s]) / rate(sched_events_total{type=\"switch\"}[30s])", "legendFormat": "{{cgroup_id}}" }],
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 18 },
+      "fieldConfig": { "defaults": { "unit": "ratio" } }
+    },
+    { "type": "row", "title": "Syscalls", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 } },
+    {
+      "type": "timeseries",
+      "title": "Syscall Rate (per container & syscall)",
+      "targets": [{ "expr": "sum by (cgroup_id, syscall) (rate(syscall_calls_total[30s]))", "legendFormat": "sys={{syscall}} {{cgroup_id}}" }],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 25 },
+      "fieldConfig": { "defaults": { "unit": "calls/s" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Avg Syscall Latency (ns)",
+      "targets": [
+        {
+          "expr": "(sum by (cgroup_id, syscall) (rate(syscall_latency_nanoseconds_total[30s]))) / ignoring() (sum by (cgroup_id, syscall) (rate(syscall_calls_total[30s])))",
+          "legendFormat": "sys={{syscall}} {{cgroup_id}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 33 },
+      "fieldConfig": { "defaults": { "unit": "ns" } }
+    },
+    {
+      "type": "stat",
+      "title": "Top 5 Containers by Scheduler Pressure (5m)",
+      "targets": [{ "expr": "topk(5, rate(sched_events_total{type=\"wakeup\"}[5m]) / rate(sched_events_total{type=\"switch\"}[5m]))", "legendFormat": "{{cgroup_id}}" }],
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 41 },
+      "fieldConfig": { "defaults": { "unit": "ratio" } }
+    }
+  ]
+}

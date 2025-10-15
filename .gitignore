@@ -42,3 +42,8 @@ gocker-daemon
 .ccls-cache
 sched_monitor.skel.h
 sched_monitor.bpf.o
+
+collector
+ctl
+queries.active
+*.o

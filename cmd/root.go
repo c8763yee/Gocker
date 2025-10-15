@@ -36,14 +36,6 @@ var rootCmd = &cobra.Command{
 			logrus.Fatalf("初始化 gocker 網路失敗: %v", err)
 		}
 
-		// go func() {
-		// 	logrus.Info("Starting metrics server on http://localhost:2112/metrics")
-		// 	http.Handle("/metrics", promhttp.Handler())
-		// 	if err := http.ListenAndServe(":2112", nil); err != nil {
-		// 		log.Fatalf("Failed to start metrics server: %v", err)
-		// 	}
-		// }()
-
 		logrus.SetLevel(level)
 		logrus.SetOutput(os.Stdout)
 	},
