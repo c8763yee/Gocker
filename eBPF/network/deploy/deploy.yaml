@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ebpf-network-latency
+  labels:
+    app: ebpf-network-latency
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ebpf-network-latency
+  template:
+    metadata:
+      labels:
+        app: ebpf-network-latency
+    spec:
+      initContainers:
+        - name: init-set-rlimit
+          image: busybox
+          command: ["sh", "-c", "ulimit -l 1073741824"]
+          securityContext:
+            privileged: true
+      containers:
+        - name: ebpf-exporter
+          image: $IMAGE
+          imagePullPolicy: Always
+          securityContext:
+            capabilities:
+              add: ["CAP_NET_ADMIN", "CAP_SYS_ADMIN", "CAP_BPF"]
+            privileged: true
+          volumeMounts:
+            - mountPath: /sys
+              name: sys
+              readOnly: true
+            - mountPath: /sys/fs/bpf
+              name: bpf
+              readOnly: false
+          ports:
+            - containerPort: 2112
+              name: metrics
+          env:
+            - name: BPFTRACE_LOG_LEVEL
+              value: "debug"
+            - name: BPFOOL_DEBUG
+              value: "1"
+          resources:
+            limits:
+              cpu: 100m
+              memory: 128Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: bpf
+          hostPath:
+            path: /sys/fs/bpf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ebpf-network-latency
+spec:
+  ports:
+    - name: metrics
+      port: 2112
+      targetPort: 2112
+  selector:
+    app: ebpf-network-latency
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ebpf-network-latency
+spec:
+  selector:
+    matchLabels:
+      app: ebpf-network-latency
+  endpoints:
+    - port: metrics
+      interval: 30s

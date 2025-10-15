@@ -107,27 +107,31 @@ static void dump_cgstats(struct sched_monitor_bpf *skel)
     }
 }
 
+// 將一個 cgroup 的 ID (cgid) 加入到 eBPF map allowed_cgroups 中，value 設為 1
 static int add_allowed_cgroup(int map_fd, __u64 cgid)
 {
     uint8_t one = 1;
-    if (bpf_map_update_elem(map_fd, &cgid, &one, BPF_ANY) < 0)
+    if (bpf_map_update_elem(map_fd, &cgid, &one, BPF_ANY) < 0)  // BPF_ANY 是插入策略, 若 key 已存在就覆蓋；不存在就新增
         return -errno;
     return 0;
 }
 
 
-//負責從指定路徑一路走訪所有子 cgroup，並把每個 cgroup 的 inode (即 cgroup ID) 加入 BPF map
-// 功能：遞迴掃描一棵 cgroup 目錄樹，
-//       將每個 cgroup（目錄）的 inode 寫入 BPF map。
-//       inode 在 cgroup v2 中等同於 bpf_get_current_cgroup_id() 所回傳的 cgroup ID。
-//       -> 這樣 eBPF 程式端就能判斷當前任務是否屬於允許監控的 cgroup。
+/*負責從指定路徑一路走訪所有子 cgroup，並把每個 cgroup 的 inode (即 cgroup ID) 加入 BPF map
+ 功能：遞迴掃描一棵 cgroup 目錄樹，
+       將每個 cgroup（目錄）的 inode 寫入 BPF map。
+       inode 在 cgroup v2 中等同於 bpf_get_current_cgroup_id() 所回傳的 cgroup ID。
+       -> 這樣 eBPF 程式端就能判斷當前任務是否屬於允許監控的 cgroup。
+*/
 static int walk_cgroup_tree(int map_fd, const char *path)
 {
     struct stat st;
 
-    if (stat(path, &st) < 0)  // 先對指定路徑做 stat()，確認該路徑存在並可存取。
+    // stat()：取得檔案/目錄的 metadata
+    // 確保只會對「合法 cgroup 目錄」進行遞迴
+    if (stat(path, &st) < 0)  // path 不存在
         return -errno;
-    if (!S_ISDIR(st.st_mode))  // 若該路徑不是目錄（例如檔案），直接回傳錯誤。
+    if (!S_ISDIR(st.st_mode))  // 如果path存在 但不是目錄
         return -ENOTDIR;
 
     // 將目前這個目錄（cgroup）的 inode 寫入 allowed_cgroups map。
@@ -135,7 +139,7 @@ static int walk_cgroup_tree(int map_fd, const char *path)
     if (err)
         return err;
 
-    // 開啟當前 cgroup 目錄
+    // 開啟"/sys/fs/cgroup/gocker", 
     DIR *dir = opendir(path);
     if (!dir)
         return -errno;
@@ -149,7 +153,7 @@ static int walk_cgroup_tree(int map_fd, const char *path)
         if (!entry) {
             if (err == 0 && errno != 0)  // 若 readdir 發生錯誤（非正常結束）
                 err = -errno;
-            break;
+            break;                       // 否則是正常結束
         }
 
          // 跳過 "." 和 ".." 這兩個特殊目錄
@@ -194,7 +198,9 @@ static int walk_cgroup_tree(int map_fd, const char *path)
 // 將指定路徑下的 cgroup,掃描出所有子 cgroup，並把它們的 ID 寫入 eBPF map：allowed_cgroups。
 static int populate_allowed_cgroups(struct sched_monitor_bpf *skel, const char *root_path)
 {
-    int map_fd = bpf_map__fd(skel->maps.allowed_cgroups);
+    // 從eBPF skeleton取得allowed_cgroups這張map的file descriptor
+    // 這樣user-space就可以直接對該map進行 bpf_map_ 操作
+    int map_fd = bpf_map__fd(skel->maps.allowed_cgroups); 
     if (map_fd < 0)
         return -errno;
 
@@ -259,7 +265,7 @@ int main(int argc, char **argv)
 
 
     // handle_event 是 callback，用來處理從 kernel 傳回的事件資料
-    rb = ring_buffer__new(bpf_map__fd(skel->maps.events_rb), handle_event, NULL, NULL);  // 建立 ring buffer
+    rb = ring_buffer__new(bpf_map__fd(skel->maps.events_rb), handle_event, NULL, NULL);  // 在 user-space 建立一個 ring buffer consumer
     if (!rb) {
         fprintf(stderr, "failed to create ring buffer\n");
         goto cleanup;
@@ -276,7 +282,7 @@ int main(int argc, char **argv)
     // simple poll loop with periodic stats dump
     uint64_t last_dump_ms = 0;  // 上次dump 的時間 (ms)
     while (!exiting) {          // 持續監聽直到使用者中斷
-        int ret = ring_buffer__poll(rb, 200 /* ms */);   // 每 200ms read一次 ring buffer 事件
+        int ret = ring_buffer__poll(rb, 200 /* ms */);   // ring_buffer__poll() 收事件, 每 200ms 收一次 ring buffer 事件
         if (ret < 0 && ret != -EINTR) {
             fprintf(stderr, "ring_buffer__poll: %d\n", ret);
         break;

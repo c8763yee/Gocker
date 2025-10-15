@@ -1,0 +1,8 @@
+prometheus:
+  prometheusSpec:
+    additionalScrapeConfigs:
+      - job_name: 'gocker-network-monitor'
+        static_configs:
+          - targets: ['host.docker.internal:9100']   # 換成你的 exporter host:port
+            labels:
+              cgroup_root: '/sys/fs/cgroup/gocker'

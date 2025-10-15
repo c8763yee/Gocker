@@ -1,0 +1,5 @@
+route:
+  receiver: "default"
+receivers:
+  - name: "default"
+    # MVP：只在 UI 顯示，不送外部通知
