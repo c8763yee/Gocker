@@ -80,3 +80,7 @@ type StartRequest struct {
 	Attach      bool   `json:"attach"`
 	Tty         bool   `json:"tty"`
 }
+
+type PullRequest struct {
+	Image string `json:"image"` // 例如 "alpine:latest"
+}

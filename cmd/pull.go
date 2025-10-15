@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"gocker/internal/api"
 	"gocker/internal/types"
 
@@ -15,9 +16,16 @@ var pullCommand = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		imageName := args[0]
+		pullReq := types.PullRequest{
+			Image: imageName,
+		}
+		payload, err := json.Marshal(pullReq)
+		if err != nil {
+			logrus.Fatalf("序列化 pull 請求失敗: %v", err)
+		}
 		req := types.Request{
 			Command: "pull",
-			Payload: []byte(imageName),
+			Payload: payload,
 		}
 		res, err := api.SendRequest(req)
 		if err != nil {
