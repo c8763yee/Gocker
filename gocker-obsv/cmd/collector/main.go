@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -127,6 +129,35 @@ func cgroupLevel(root, path string) (uint32, error) {
 		}
 	}
 	return uint32(n), nil
+}
+
+func collectAllowed(root string) (map[uint64]struct{}, error) {
+	allowed := make(map[uint64]struct{})
+	add := func(path string) error {
+		ino, err := cgroupInode(path)
+		if err != nil {
+			return err
+		}
+		allowed[ino] = struct{}{}
+		return nil
+	}
+	if err := add(root); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return allowed, err
+	}
+	var agg error
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err := add(filepath.Join(root, entry.Name())); err != nil && !os.IsNotExist(err) {
+			agg = errors.Join(agg, err)
+		}
+	}
+	return allowed, agg
 }
 
 // --- modules typed holders (含 config map) ---
@@ -274,6 +305,32 @@ func main() {
 	cfg0 := cfg{SampleRate: uint32(sampleRate), EnableFilter: 1, TargetLevel: uint32(level), TargetCgid: uint64(tgid)}
 	log.Printf("Target subtree %s (inode=%d, level=%d), sample_rate=%d", targetPath, tgid, level, sampleRate)
 
+	var (
+		allowedMu    sync.RWMutex
+		allowed      map[uint64]struct{}
+		allowedCount int
+	)
+	refreshAllowed := func() {
+		set, err := collectAllowed(targetPath)
+		if err != nil {
+			log.Printf("collect allowed from %s: %v", targetPath, err)
+		}
+		if set == nil {
+			set = make(map[uint64]struct{})
+		}
+		if len(set) == 0 {
+			set[cfg0.TargetCgid] = struct{}{}
+		}
+		allowedMu.Lock()
+		allowed = set
+		allowedMu.Unlock()
+		if len(set) != allowedCount {
+			allowedCount = len(set)
+			log.Printf("allowed cgroup whitelist size=%d", allowedCount)
+		}
+	}
+	refreshAllowed()
+
 	// 載入三模組（無 pin，程序退出 maps 就銷毀）
 	var pf pfModule
 	var sched schedModule
@@ -357,6 +414,16 @@ func main() {
 	lastSysCnt := make(lastMap, 16384)
 	lastSysSum := make(lastMap, 16384)
 
+	allowedHas := func(cgid uint64) bool {
+		allowedMu.RLock()
+		defer allowedMu.RUnlock()
+		if allowed == nil {
+			return false
+		}
+		_, ok := allowed[cgid]
+		return ok
+	}
+
 	scan := func(m *ebpf.Map, last lastMap, apply func(k cgKey, delta uint64)) {
 		if m == nil {
 			return
@@ -367,6 +434,10 @@ func main() {
 			var total uint64
 			for _, v := range val {
 				total += v
+			}
+			if !allowedHas(k.Cgid) {
+				delete(last, k)
+				continue
 			}
 			prev := last[k]
 			if total >= prev {
@@ -386,6 +457,7 @@ func main() {
 	defer ticker.Stop()
 	log.Printf("Scanning maps each 1s…")
 	for range ticker.C {
+		refreshAllowed()
 		scan(pf.MapPF, lastPF, func(k cgKey, d uint64) {
 			pageFaults.WithLabelValues(labelPF(k.Type), fmt.Sprintf("%d", k.Cgid)).Add(float64(d))
 		})

@@ -43,6 +43,7 @@ gocker-daemon
 sched_monitor.skel.h
 sched_monitor.bpf.o
 
+!gocker-obsv/cmd/collector/
 collector
 ctl
 queries.active
