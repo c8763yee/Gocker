@@ -59,6 +59,10 @@ var (
 		prometheus.CounterOpts{Name: "syscall_latency_nanoseconds_total", Help: "Per-cgroup per-syscall total latency (ns)."},
 		[]string{"syscall", "cgroup_id"},
 	)
+	cpuSched = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "cpu_sched_ns_total", Help: "Per-cgroup scheduler time buckets (ns)."},
+		[]string{"type", "cgroup_id"},
+	)
 )
 
 func labelPF(t uint32) string {
@@ -80,6 +84,18 @@ func labelSC(t uint32) string {
 	return "unknown"
 }
 func labelSys(sysnr uint32) string { return fmt.Sprintf("%d", sysnr) }
+func labelCPU(t uint32) string {
+	switch t {
+	case 1:
+		return "runtime"
+	case 2:
+		return "wait"
+	case 3:
+		return "iowait"
+	default:
+		return "unknown"
+	}
+}
 
 func getenv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -181,6 +197,15 @@ type sysModule struct {
 	MapL *ebpf.Map     `ebpf:"cg_sys_lat_ns"`
 	Cfg  *ebpf.Map     `ebpf:"cfg_map"` // ←
 }
+type cpuModule struct {
+	Run    *ebpf.Program `ebpf:"tp_sched_stat_runtime"`
+	Wait   *ebpf.Program `ebpf:"tp_sched_stat_wait"`
+	IO     *ebpf.Program `ebpf:"tp_sched_stat_iowait"`
+	Switch *ebpf.Program `ebpf:"tp_sched_switch_cpu"`
+	Exit   *ebpf.Program `ebpf:"tp_sched_exit_cpu"`
+	MapNs  *ebpf.Map     `ebpf:"cg_cpu_ns"`
+	Cfg    *ebpf.Map     `ebpf:"cfg_map"`
+}
 
 func loadModule(path string, rew map[string]interface{}, out interface{}) (func(), error) {
 	b, err := os.ReadFile(path)
@@ -247,6 +272,28 @@ func loadModule(path string, rew map[string]interface{}, out interface{}) (func(
 			if m.Cfg != nil {
 				m.Cfg.Close()
 			}
+		case *cpuModule:
+			if m.Run != nil {
+				m.Run.Close()
+			}
+			if m.Wait != nil {
+				m.Wait.Close()
+			}
+			if m.IO != nil {
+				m.IO.Close()
+			}
+			if m.Switch != nil {
+				m.Switch.Close()
+			}
+			if m.Exit != nil {
+				m.Exit.Close()
+			}
+			if m.MapNs != nil {
+				m.MapNs.Close()
+			}
+			if m.Cfg != nil {
+				m.Cfg.Close()
+			}
 		}
 	}, nil
 }
@@ -279,12 +326,16 @@ func writeCfgAll(c cfg, mods ...interface{}) {
 			if mo != nil && mo.Cfg != nil {
 				_ = mo.Cfg.Update(&key, &c, ebpf.UpdateAny)
 			}
+		case *cpuModule:
+			if mo != nil && mo.Cfg != nil {
+				_ = mo.Cfg.Update(&key, &c, ebpf.UpdateAny)
+			}
 		}
 	}
 }
 
 func main() {
-	prometheus.MustRegister(pageFaults, schedEvents, sysCalls, sysLatency)
+	prometheus.MustRegister(pageFaults, schedEvents, sysCalls, sysLatency, cpuSched)
 
 	cgroupRoot := getenv("CGROUP_ROOT", cgroupRootDefault)
 	targetPath := getenv("PF_TARGET_CGROUP", gockerPathDefault)
@@ -331,10 +382,11 @@ func main() {
 	}
 	refreshAllowed()
 
-	// 載入三模組（無 pin，程序退出 maps 就銷毀）
+	// 載入各模組（無 pin，程序退出 maps 就銷毀）
 	var pf pfModule
 	var sched schedModule
 	var sys sysModule
+	var cpu cpuModule
 
 	rew := map[string]interface{}{"SAMPLE_RATE": uint32(sampleRate), "ENABLE_FILTER": uint32(1), "TARGET_LEVEL": uint32(level), "TARGET_CGID": uint64(tgid)}
 	if closer, err := loadModule("bpf/pf.bpf.o", rew, &pf); err != nil {
@@ -352,8 +404,13 @@ func main() {
 	} else {
 		defer closer()
 	}
+	if closer, err := loadModule("bpf/cpu.bpf.o", rew, &cpu); err != nil {
+		log.Printf("cpu module skipped: %v", err)
+	} else {
+		defer closer()
+	}
 
-	writeCfgAll(cfg0, &pf, &sched, &sys)
+	writeCfgAll(cfg0, &pf, &sched, &sys, &cpu)
 
 	links := []link.Link{
 		attachTracepoint("exceptions", "page_fault_user", pf.ProgU),
@@ -363,6 +420,11 @@ func main() {
 		attachTracepoint("sched", "sched_process_exit", sched.Exit),
 		attachTracepoint("raw_syscalls", "sys_enter", sys.En),
 		attachTracepoint("raw_syscalls", "sys_exit", sys.Ex),
+		attachTracepoint("sched", "sched_stat_runtime", cpu.Run),
+		attachTracepoint("sched", "sched_stat_wait", cpu.Wait),
+		attachTracepoint("sched", "sched_stat_iowait", cpu.IO),
+		attachTracepoint("sched", "sched_switch", cpu.Switch),
+		attachTracepoint("sched", "sched_process_exit", cpu.Exit),
 	}
 	defer func() {
 		for _, l := range links {
@@ -396,7 +458,7 @@ func main() {
 			in.EnableFilter = 1
 		}
 		cfg0 = in
-		writeCfgAll(cfg0, &pf, &sched, &sys)
+		writeCfgAll(cfg0, &pf, &sched, &sys, &cpu)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 		log.Printf("config updated: %+v", cfg0)
@@ -413,6 +475,7 @@ func main() {
 	lastSC := make(lastMap, 4096)
 	lastSysCnt := make(lastMap, 16384)
 	lastSysSum := make(lastMap, 16384)
+	lastCPU := make(lastMap, 4096)
 
 	allowedHas := func(cgid uint64) bool {
 		allowedMu.RLock()
@@ -469,6 +532,9 @@ func main() {
 		})
 		scan(sys.MapL, lastSysSum, func(k cgKey, d uint64) {
 			sysLatency.WithLabelValues(labelSys(k.Type), fmt.Sprintf("%d", k.Cgid)).Add(float64(d))
+		})
+		scan(cpu.MapNs, lastCPU, func(k cgKey, d uint64) {
+			cpuSched.WithLabelValues(labelCPU(k.Type), fmt.Sprintf("%d", k.Cgid)).Add(float64(d))
 		})
 	}
 }

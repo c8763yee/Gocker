@@ -12,7 +12,7 @@ CLANG ?= clang
 BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_$(TARGET_ARCH) \
               -Wall -Wno-unused-value -Wno-pointer-sign -Wno-compare-distinct-pointer-types
 
-all: vmlinux.h pf.bpf.o sched.bpf.o sys.bpf.o
+all: vmlinux.h pf.bpf.o sched.bpf.o sys.bpf.o cpu.bpf.o
 
 vmlinux.h:
 	@if [ ! -e /sys/kernel/btf/vmlinux ]; then \
@@ -28,6 +28,9 @@ sched.bpf.o: sched.bpf.c vmlinux.h
 	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 sys.bpf.o: sys.bpf.c vmlinux.h
+	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
+
+cpu.bpf.o: cpu.bpf.c vmlinux.h
 	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:

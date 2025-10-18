@@ -49,12 +49,49 @@
       "gridPos": { "h": 6, "w": 24, "x": 0, "y": 18 },
       "fieldConfig": { "defaults": { "unit": "ratio" } }
     },
-    { "type": "row", "title": "Syscalls", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 } },
+    { "type": "row", "title": "CPU Usage", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 } },
+    {
+      "type": "timeseries",
+      "title": "CPU Utilization (cores)",
+      "targets": [
+        {
+          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\", cgroup_id=~\"$cgroup_id\"}[1m])) / 1e9",
+          "legendFormat": "{{cgroup_id}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 25 },
+      "fieldConfig": { "defaults": { "unit": "cores" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Run Queue Wait Share",
+      "targets": [
+        {
+          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"wait\", cgroup_id=~\"$cgroup_id\"}[1m])) / (sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\", cgroup_id=~\"$cgroup_id\"}[1m])) + sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"wait\", cgroup_id=~\"$cgroup_id\"}[1m])))",
+          "legendFormat": "{{cgroup_id}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 25 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "I/O Wait Share",
+      "targets": [
+        {
+          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"iowait\", cgroup_id=~\"$cgroup_id\"}[1m])) / (sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\", cgroup_id=~\"$cgroup_id\"}[1m])) + sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"iowait\", cgroup_id=~\"$cgroup_id\"}[1m])))",
+          "legendFormat": "{{cgroup_id}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 25 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } }
+    },
+    { "type": "row", "title": "Syscalls", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 } },
     {
       "type": "timeseries",
       "title": "Syscall Rate (per container & syscall)",
       "targets": [{ "expr": "sum by (cgroup_id, syscall) (rate(syscall_calls_total[30s]))", "legendFormat": "sys={{syscall}} {{cgroup_id}}" }],
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 25 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 34 },
       "fieldConfig": { "defaults": { "unit": "calls/s" } }
     },
     {
@@ -66,14 +103,14 @@
           "legendFormat": "sys={{syscall}} {{cgroup_id}}"
         }
       ],
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 33 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 42 },
       "fieldConfig": { "defaults": { "unit": "ns" } }
     },
     {
       "type": "stat",
       "title": "Top 5 Containers by Scheduler Pressure (5m)",
       "targets": [{ "expr": "topk(5, rate(sched_events_total{type=\"wakeup\"}[5m]) / rate(sched_events_total{type=\"switch\"}[5m]))", "legendFormat": "{{cgroup_id}}" }],
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 41 },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 50 },
       "fieldConfig": { "defaults": { "unit": "ratio" } }
     }
   ]
