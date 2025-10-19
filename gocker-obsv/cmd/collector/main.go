@@ -43,6 +43,7 @@ type cfg struct {
 	TargetCgid   uint64 `json:"target_cgid"`
 }
 
+// 說明：memCounters/psiCounters 用於保存前次讀取值，方便計算差分
 type memCounters struct {
 	Major uint64
 	Minor uint64
@@ -389,11 +390,13 @@ func main() {
 		allowed      map[uint64]string
 		allowedCount int
 	)
+	// 說明：memoryLast / psiLast* 以 cgroup id 保存前次的 memory.stat、PSI total 數值
 	memoryLast := make(map[uint64]memCounters)
 	psiLastCPU := make(map[uint64]psiCounters)
 	psiLastIO := make(map[uint64]psiCounters)
 	psiLastMem := make(map[uint64]psiCounters)
 
+	// 說明：pruneState() 在白名單更新後移除不存在的 cgroup 狀態，避免資料殘留
 	pruneState := func(set map[uint64]string) {
 		for cgid := range memoryLast {
 			if _, ok := set[cgid]; !ok {
@@ -555,6 +558,7 @@ func main() {
 		return out
 	}
 
+	// 說明：scan() 遍歷 eBPF maps，計算差分後餵給 Prometheus Counter
 	scan := func(m *ebpf.Map, last lastMap, apply func(k cgKey, delta uint64)) {
 		if m == nil {
 			return
@@ -671,6 +675,7 @@ func main() {
 			if pgfault >= pgmaj {
 				pgminor = pgfault - pgmaj
 			}
+			// 說明：major/minor fault 透過 memoryLast 記錄上次數值，做差分後累加
 			if prev, ok := memoryLast[cgid]; ok {
 				id := strconv.FormatUint(cgid, 10)
 				if pgmaj >= prev.Major {
@@ -702,6 +707,7 @@ func main() {
 			id := strconv.FormatUint(cgid, 10)
 
 			if some, full, err := readPSI(filepath.Join(dir, "cpu.pressure")); err == nil {
+				// 說明：PSI total 單位為微秒，因此差分後需除以 1e6 轉換成秒
 				if prev, ok := psiLastCPU[cgid]; ok {
 					if some >= prev.Some {
 						if d := some - prev.Some; d > 0 {

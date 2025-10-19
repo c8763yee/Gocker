@@ -18,6 +18,7 @@ struct { __uint(type, BPF_MAP_TYPE_ARRAY); __uint(max_entries, 1);
 enum cpu_type { CPU_RUNTIME = 1, CPU_WAIT = 2, CPU_IOWAIT = 3 };
 struct cg_key { __u64 cgid; __u32 type; __u32 pad; };
 
+// 說明：cg_cpu_ns 用於累加各 cgroup 的 runtime/wait/iowait（以奈秒為單位）
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_HASH);
     __uint(max_entries, 4096);
@@ -39,6 +40,7 @@ struct {
     __type(value, __u64);
 } per_cpu_cnt SEC(".maps");
 
+// 說明：load_cfg 與 pass_sample 與其他模組共享邏輯，透過 cfg_map 調整熱更新參數
 static __always_inline void load_cfg(__u32 *rate, __u32 *en, __u32 *lvl, __u64 *cgid) {
     __u32 k = 0;
     struct cfg *c = bpf_map_lookup_elem(&cfg_map, &k);
@@ -78,6 +80,7 @@ static __always_inline void remember_pid(__u32 pid, __u64 cgid) {
     bpf_map_update_elem(&pid_cgid, &pid, &cgid, BPF_ANY);
 }
 
+// 說明：若 pid 已存在對應 cgroup id，可透過此函式回傳給後續計算使用
 static __always_inline bool pid_to_cgid(__u32 pid, __u64 *cgid) {
     __u64 *val = bpf_map_lookup_elem(&pid_cgid, &pid);
     if (!val) {
@@ -143,6 +146,7 @@ int tp_sched_stat_runtime(struct trace_event_raw_sched_stat_runtime *ctx)
     return add_cpu_ns(cgid, CPU_RUNTIME, ctx->runtime);
 }
 
+// 說明：handle_delay_event 將 wait/iowait 延遲歸戶到對應 cgroup
 static __always_inline int handle_delay_event(__u32 pid, __u64 delay, __u32 type)
 {
     __u64 cgid = 0;

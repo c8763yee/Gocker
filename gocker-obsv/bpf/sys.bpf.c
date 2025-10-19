@@ -24,6 +24,7 @@ struct { __uint(type, BPF_MAP_TYPE_PERCPU_HASH); __uint(max_entries, 16384);
 
 struct start_key { __u32 pid; __u32 sys; };
 struct start_val { __u64 ts_ns; __u64 cgid; };
+// 說明：sys 模組在 sys_enter 記錄開始時間與 cgroup id，sys_exit 計算耗時後累加
 struct { __uint(type, BPF_MAP_TYPE_LRU_HASH); __uint(max_entries, 65536);
          __type(key, struct start_key); __type(value, struct start_val); } sys_enter_start SEC(".maps");
 
@@ -38,6 +39,7 @@ int tp_sys_enter(struct trace_event_raw_sys_enter* ctx)
 {
     __u32 rate,en,lvl; __u64 cgid; load_cfg(&rate,&en,&lvl,&cgid);
     if (en) {
+        // 說明：若啟用過濾，只處理目標子樹內的系統呼叫
         __u64 anc = bpf_get_current_ancestor_cgroup_id((int)lvl);
         if (!(anc && anc == cgid)) return 0;
     }
@@ -47,6 +49,7 @@ int tp_sys_enter(struct trace_event_raw_sys_enter* ctx)
     return 0;
 }
 
+// 說明：add_u64() 在 map 中累計次數或延遲，若尚未存在會先初始化
 static __always_inline void add_u64(struct bpf_map *m, struct cg_key *k, __u64 delta)
 {
     __u64 *val = bpf_map_lookup_elem(m, k);

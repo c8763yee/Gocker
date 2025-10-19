@@ -17,6 +17,7 @@ struct { __uint(type, BPF_MAP_TYPE_ARRAY); __uint(max_entries, 1);
 enum sc_type { EVT_SWITCH_IN = 1, EVT_WAKEUP = 2 };
 struct cg_key { __u64 cgid; __u32 type; __u32 pad; };
 
+// 說明：sched 模組追蹤 sched_switch 與 sched_wakeup，以估算各 cgroup 的排程行為
 struct { __uint(type, BPF_MAP_TYPE_PERCPU_HASH); __uint(max_entries, 4096);
          __type(key, struct cg_key); __type(value, __u64); } cg_sched_cnt SEC(".maps");
 
@@ -26,6 +27,7 @@ struct { __uint(type, BPF_MAP_TYPE_LRU_HASH); __uint(max_entries, 65536);
 struct { __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY); __uint(max_entries, 1);
          __type(key, __u32); __type(value, __u64); } per_cpu_cnt SEC(".maps");
 
+// 說明：load_cfg/pass_sample 與 pf 模組相同，提供熱更新與取樣控制
 static __always_inline void load_cfg(__u32 *rate, __u32 *en, __u32 *lvl, __u64 *cgid) {
     __u32 k=0; struct cfg *c=bpf_map_lookup_elem(&cfg_map,&k);
     if (c){ *rate=c->sample_rate?c->sample_rate:1; *en=c->enable_filter; *lvl=c->target_level; *cgid=c->target_cgid; }
@@ -51,6 +53,7 @@ static __always_inline int bump_sched(__u64 cgid, __u32 type) {
     *val += 1; return 0;
 }
 
+// 說明：sched_switch 更新 next pid 對應的 cgroup id，並統計 switch-in 事件
 SEC("tracepoint/sched/sched_switch")
 int tp_sched_switch(struct trace_event_raw_sched_switch* ctx)
 {
@@ -72,6 +75,7 @@ int tp_sched_wakeup(struct trace_event_raw_sched_wakeup_template* ctx)
     return bump_sched(*cgid, EVT_WAKEUP);
 }
 
+// 說明：進程結束時清理 pid 對應，避免殘留占用 LRU map
 SEC("tracepoint/sched/sched_process_exit")
 int tp_sched_exit(struct trace_event_raw_sched_process_template* ctx)
 {
