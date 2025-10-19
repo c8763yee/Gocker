@@ -18,7 +18,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 4,
+  "id": 0,
   "links": [],
   "panels": [
     {
@@ -35,9 +35,97 @@
       "type": "row"
     },
     {
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "faults/s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.2.0",
+      "targets": [
+        {
+          "expr": "rate(page_faults_total[30s])",
+          "legendFormat": "{{cgroup_id}} ({{type}})",
+          "refId": "A"
+        }
+      ],
+      "title": "Page Faults per Container (30s rate)",
+      "type": "timeseries"
+    },
+    {
       "datasource": {
-        "type": "prometheus",
-        "uid": "ef100t9tqmebkb"
+        "type": "prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -98,11 +186,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
-        "x": 0,
+        "w": 12,
+        "x": 12,
         "y": 1
       },
-      "id": 2,
+      "id": 3,
       "options": {
         "legend": {
           "calcs": [],
@@ -119,12 +207,12 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "expr": "rate(page_faults_total[30s])",
+          "expr": "sum by (cgroup_id, type) (rate(memory_page_faults_total[1m]))",
           "legendFormat": "{{cgroup_id}} ({{type}})",
           "refId": "A"
         }
       ],
-      "title": "Page Faults per Container (30s rate)",
+      "title": "Major / Minor Page Faults (1m rate)",
       "type": "timeseries"
     },
     {
@@ -135,16 +223,12 @@
         "x": 0,
         "y": 9
       },
-      "id": 3,
+      "id": 4,
       "panels": [],
       "title": "Scheduler",
       "type": "row"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "ef100t9tqmebkb"
-      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -208,7 +292,7 @@
         "x": 0,
         "y": 10
       },
-      "id": 4,
+      "id": 5,
       "options": {
         "legend": {
           "calcs": [],
@@ -240,8 +324,7 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "ef100t9tqmebkb"
+        "type": "prometheus"
       },
       "fieldConfig": {
         "defaults": {
@@ -306,7 +389,7 @@
         "x": 0,
         "y": 18
       },
-      "id": 5,
+      "id": 6,
       "options": {
         "legend": {
           "calcs": [],
@@ -341,16 +424,12 @@
         "x": 0,
         "y": 24
       },
-      "id": 6,
+      "id": 7,
       "panels": [],
       "title": "CPU Usage",
       "type": "row"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "ef100t9tqmebkb"
-      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -414,7 +493,7 @@
         "x": 0,
         "y": 25
       },
-      "id": 7,
+      "id": 8,
       "options": {
         "legend": {
           "calcs": [],
@@ -431,10 +510,8 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "editorMode": "code",
           "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\"}[1m])) / 1e9",
           "legendFormat": "{{cgroup_id}}",
-          "range": true,
           "refId": "A"
         }
       ],
@@ -442,10 +519,6 @@
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "ef100t9tqmebkb"
-      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -509,7 +582,7 @@
         "x": 8,
         "y": 25
       },
-      "id": 8,
+      "id": 9,
       "options": {
         "legend": {
           "calcs": [],
@@ -526,10 +599,8 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "editorMode": "code",
-          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"wait\"}[1m])) / clamp_min(sum by (cgroup_id) (rate(cpu_sched_ns_total{type=~\"runtime|wait\"}[1m])), 1e-9)",
+          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"wait\"}[1m])) / (sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\"}[1m])) + sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"wait\"}[1m])))",
           "legendFormat": "{{cgroup_id}}",
-          "range": true,
           "refId": "A"
         }
       ],
@@ -537,10 +608,6 @@
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "ef100t9tqmebkb"
-      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -604,7 +671,7 @@
         "x": 16,
         "y": 25
       },
-      "id": 9,
+      "id": 10,
       "options": {
         "legend": {
           "calcs": [],
@@ -621,10 +688,8 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "editorMode": "code",
-          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"iowait\"}[1m])) / clamp_min(sum by (cgroup_id) (rate(cpu_sched_ns_total{type=~\"runtime|iowait\"}[1m])), 1e-9)",
+          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"iowait\"}[1m])) / (sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\"}[1m])) + sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"iowait\"}[1m])))",
           "legendFormat": "{{cgroup_id}}",
-          "range": true,
           "refId": "A"
         }
       ],
@@ -639,16 +704,12 @@
         "x": 0,
         "y": 33
       },
-      "id": 10,
+      "id": 11,
       "panels": [],
       "title": "Syscalls",
       "type": "row"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "ef100t9tqmebkb"
-      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -712,7 +773,7 @@
         "x": 0,
         "y": 34
       },
-      "id": 11,
+      "id": 12,
       "options": {
         "legend": {
           "calcs": [],
@@ -738,10 +799,6 @@
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "ef100t9tqmebkb"
-      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -805,7 +862,7 @@
         "x": 0,
         "y": 42
       },
-      "id": 12,
+      "id": 13,
       "options": {
         "legend": {
           "calcs": [],
@@ -861,7 +918,7 @@
         "x": 0,
         "y": 50
       },
-      "id": 13,
+      "id": 14,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -891,41 +948,374 @@
       ],
       "title": "Top 5 Containers by Scheduler Pressure (5m)",
       "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
+      "id": 15,
+      "panels": [],
+      "title": "PSI",
+      "type": "row"
+    },
+    {
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 57
+      },
+      "id": 16,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.2.0",
+      "targets": [
+        {
+          "expr": "rate(psi_cpu_stall_seconds_total{level=\"some\"}[5m]) * 100",
+          "legendFormat": "{{cgroup_id}} some",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(psi_cpu_stall_seconds_total{level=\"full\"}[5m]) * 100",
+          "legendFormat": "{{cgroup_id}} full",
+          "refId": "B"
+        }
+      ],
+      "title": "CPU PSI Stall (%)",
+      "type": "timeseries"
+    },
+    {
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 57
+      },
+      "id": 17,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.2.0",
+      "targets": [
+        {
+          "expr": "rate(psi_io_stall_seconds_total{level=\"some\"}[5m]) * 100",
+          "legendFormat": "{{cgroup_id}} some",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(psi_io_stall_seconds_total{level=\"full\"}[5m]) * 100",
+          "legendFormat": "{{cgroup_id}} full",
+          "refId": "B"
+        }
+      ],
+      "title": "IO PSI Stall (%)",
+      "type": "timeseries"
+    },
+    {
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 57
+      },
+      "id": 18,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.2.0",
+      "targets": [
+        {
+          "expr": "rate(psi_memory_stall_seconds_total{level=\"some\"}[5m]) * 100",
+          "legendFormat": "{{cgroup_id}} some",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(psi_memory_stall_seconds_total{level=\"full\"}[5m]) * 100",
+          "legendFormat": "{{cgroup_id}} full",
+          "refId": "B"
+        }
+      ],
+      "title": "Memory PSI Stall (%)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 63
+      },
+      "id": 19,
+      "panels": [],
+      "title": "Help",
+      "type": "row"
+    },
+    {
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 64
+      },
+      "id": 20,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "### 指標與常用查詢\n\n- `page_faults_total{type,cgroup_id}` — 缺頁事件（user|kernel）；rate(page_faults_total[30s])。\n- `memory_page_faults_total{type,cgroup_id}` — major/minor 缺頁；sum by (cgroup_id,type)(rate(memory_page_faults_total[1m]))。\n- `sched_events_total{type,cgroup_id}` — 排程事件（switch|wakeup）；壓力比值：sum by (cgroup_id)(rate(...{type=\"wakeup\"}[2m])) / clamp_min(sum by (cgroup_id)(rate(...{type=\"switch\"}[2m])), 1e-9)。\n- `cpu_sched_ns_total{type,cgroup_id}` — 累積時間（ns；runtime|wait|iowait；需 sched_schedstats=1）。\n  - CPU 利用率(cores)：sum by (cgroup_id)(rate(cpu_sched_ns_total{type=\"runtime\"}[1m])) / 1e9\n  - Run-queue Wait Share：sum by (cgroup_id)(rate(cpu_sched_ns_total{type=\"wait\"}[1m])) / sum by (cgroup_id)(rate(cpu_sched_ns_total{type=~\"runtime|wait\"}[1m]))\n  - I/O Wait Share：sum by (cgroup_id)(rate(cpu_sched_ns_total{type=\"iowait\"}[1m])) / sum by (cgroup_id)(rate(cpu_sched_ns_total{type=~\"runtime|iowait\"}[1m]))\n- `psi_*_stall_seconds_total{level,cgroup_id}` — PSI 壓力（秒）；rate(...[5m]) * 100 可得百分比。\n- `syscall_calls_total{syscall,cgroup_id}` — 系統呼叫次數；sum by (cgroup_id,syscall)(rate(syscall_calls_total[30s]))。\n- `syscall_latency_nanoseconds_total{syscall,cgroup_id}` — 系統呼叫延遲總和（ns）；平均延遲： (sum by (cgroup_id,syscall)(rate(syscall_latency_nanoseconds_total[30s]))) / ignoring() (sum by (cgroup_id,syscall)(rate(syscall_calls_total[30s])))。\n\n附註：僅統計 `/sys/fs/cgroup/gocker` 子樹；`sample_rate` 與過濾可用 /admin/config 熱更新。建議將變數 `cgroup_id` 的來源設為 `label_values(cpu_sched_ns_total, cgroup_id)`，All 值為 `.*`。",
+        "mode": "markdown"
+      },
+      "pluginVersion": "12.2.0",
+      "title": "Metrics 說明",
+      "type": "text"
     }
   ],
   "preload": false,
   "refresh": "5s",
   "schemaVersion": 42,
-  "tags": [],
+  "tags": [
+    "eBPF",
+    "Gocker",
+    "Linux"
+  ],
   "templating": {
     "list": [
       {
         "current": {
-          "text": [
-            "All"
-          ],
-          "value": [
-            "$__all"
-          ]
+          "text": "All",
+          "value": ".*"
         },
         "datasource": "Prometheus",
         "includeAll": true,
         "multi": true,
         "name": "cgroup_id",
         "options": [],
-        "query": "label_values(page_faults_total, cgroup_id)",
+        "query": "label_values(cpu_sched_ns_total, cgroup_id)",
         "refresh": 2,
         "type": "query"
       }
     ]
   },
   "time": {
-    "from": "now-30m",
+    "from": "now-5m",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Gocker eBPF Metrics (CPU Mode) Copy",
-  "uid": "adcs62s",
-  "version": 1
+  "title": "Gocker eBPF Metrics (Host Mode)",
+  "uid": "gocker-obsv-host",
+  "version": 5
 }

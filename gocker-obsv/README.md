@@ -20,3 +20,48 @@ curl -XPOST -H 'Content-Type: application/json' \
   -d '{"sample_rate":10}' http://127.0.0.1:2112/admin/config
 # 或用 CLI
 ./ctl --sample 10
+
+## Metrics 說明（Exporter /metrics）
+
+- page_faults_total{type,cgroup_id}
+  - 來源：tracepoint exceptions/page_fault_user|page_fault_kernel（eBPF map `cg_pf_cnt`）
+  - type：user｜kernel；性質：Counter（事件數）
+  - 常用：缺頁率 `rate(page_faults_total[30s])`
+
+- sched_events_total{type,cgroup_id}
+  - 來源：tracepoint sched/sched_switch（switch）與 sched/sched_wakeup（wakeup）（map `cg_sched_cnt`）
+  - 性質：Counter；常用：
+    - `rate(sched_events_total{type="switch"}[30s])`、`rate(...{type="wakeup"}[30s])`
+    - Scheduler Pressure：`sum by (cgroup_id)(rate(...{type="wakeup"}[2m])) / clamp_min(sum by (cgroup_id)(rate(...{type="switch"}[2m])),1e-9)`
+
+- cpu_sched_ns_total{type,cgroup_id}
+  - 來源：tracepoint sched_stat_runtime｜sched_stat_wait｜sched_stat_iowait（map `cg_cpu_ns`），單位 ns；需 `kernel.sched_schedstats=1`
+  - type：runtime｜wait｜iowait；性質：Counter（時間累積）
+  - 常用：
+    - CPU 利用率（cores）：`sum by (cgroup_id)(rate(cpu_sched_ns_total{type="runtime"}[1m])) / 1e9`
+    - Run-queue Wait Share：`sum by (cgroup_id)(rate(cpu_sched_ns_total{type="wait"}[1m])) / sum by (cgroup_id)(rate(cpu_sched_ns_total{type=~"runtime|wait"}[1m]))`
+    - I/O Wait Share：`sum by (cgroup_id)(rate(cpu_sched_ns_total{type="iowait"}[1m])) / sum by (cgroup_id)(rate(cpu_sched_ns_total{type=~"runtime|iowait"}[1m]))`
+
+- memory_page_faults_total{type,cgroup_id}
+  - 來源：cgroup v2 `memory.stat`（`pgfault`、`pgmajfault` 差分），type：major｜minor；性質：Counter（事件數）
+  - 常用：`sum by (cgroup_id,type)(rate(memory_page_faults_total[1m]))`
+
+- psi_cpu_stall_seconds_total / psi_io_stall_seconds_total / psi_memory_stall_seconds_total{level,cgroup_id}
+  - 來源：cgroup v2 `<resource>.pressure` 檔案的 `total`（微秒差分）；level：some｜full；性質：Counter（秒）
+  - 常用：
+    - CPU：`rate(psi_cpu_stall_seconds_total{level="some"}[5m])`
+    - IO：`rate(psi_io_stall_seconds_total{level="some"}[5m])`
+    - Memory：`rate(psi_memory_stall_seconds_total{level="some"}[5m])`
+
+- syscall_calls_total{syscall,cgroup_id}
+  - 來源：raw_syscalls/sys_enter|sys_exit（map `cg_sys_cnt`）；性質：Counter（呼叫次數）
+  - 常用：`sum by (cgroup_id,syscall)(rate(syscall_calls_total[30s]))`
+
+- syscall_latency_nanoseconds_total{syscall,cgroup_id}
+  - 來源：enter/exit 間加總延遲（map `cg_sys_lat_ns`）；性質：Counter（ns）
+  - 平均延遲（ns）：`(sum by (cgroup_id,syscall)(rate(syscall_latency_nanoseconds_total[30s]))) / ignoring() (sum by (cgroup_id,syscall)(rate(syscall_calls_total[30s])))`
+
+附註與建議：
+- 只計 `/sys/fs/cgroup/gocker` 子樹（collector 內建白名單），可用 `/admin/config` 調整目標。
+- `sample_rate` 可動態調整以控制事件量（預設 1）。
+- Grafana 變數 `cgroup_id` 建議使用 `label_values(cpu_sched_ns_total, cgroup_id)`，並把 All 值設為 `.*`，避免因無 page faults 而被過濾掉。

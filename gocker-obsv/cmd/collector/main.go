@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -41,6 +43,16 @@ type cfg struct {
 	TargetCgid   uint64 `json:"target_cgid"`
 }
 
+type memCounters struct {
+	Major uint64
+	Minor uint64
+}
+
+type psiCounters struct {
+	Some uint64
+	Full uint64
+}
+
 // Prom metrics
 var (
 	pageFaults = prometheus.NewCounterVec(
@@ -62,6 +74,22 @@ var (
 	cpuSched = prometheus.NewCounterVec(
 		prometheus.CounterOpts{Name: "cpu_sched_ns_total", Help: "Per-cgroup scheduler time buckets (ns)."},
 		[]string{"type", "cgroup_id"},
+	)
+	memoryFaults = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "memory_page_faults_total", Help: "Per-cgroup major/minor page faults from memory.stat."},
+		[]string{"type", "cgroup_id"},
+	)
+	psiCPU = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "psi_cpu_stall_seconds_total", Help: "Per-cgroup CPU pressure stall time (seconds)."},
+		[]string{"level", "cgroup_id"},
+	)
+	psiIO = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "psi_io_stall_seconds_total", Help: "Per-cgroup IO pressure stall time (seconds)."},
+		[]string{"level", "cgroup_id"},
+	)
+	psiMemory = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "psi_memory_stall_seconds_total", Help: "Per-cgroup memory pressure stall time (seconds)."},
+		[]string{"level", "cgroup_id"},
 	)
 )
 
@@ -147,14 +175,14 @@ func cgroupLevel(root, path string) (uint32, error) {
 	return uint32(n), nil
 }
 
-func collectAllowed(root string) (map[uint64]struct{}, error) {
-	allowed := make(map[uint64]struct{})
+func collectAllowed(root string) (map[uint64]string, error) {
+	allowed := make(map[uint64]string)
 	add := func(path string) error {
 		ino, err := cgroupInode(path)
 		if err != nil {
 			return err
 		}
-		allowed[ino] = struct{}{}
+		allowed[ino] = path
 		return nil
 	}
 	if err := add(root); err != nil {
@@ -335,7 +363,7 @@ func writeCfgAll(c cfg, mods ...interface{}) {
 }
 
 func main() {
-	prometheus.MustRegister(pageFaults, schedEvents, sysCalls, sysLatency, cpuSched)
+	prometheus.MustRegister(pageFaults, schedEvents, sysCalls, sysLatency, cpuSched, memoryFaults, psiCPU, psiIO, psiMemory)
 
 	cgroupRoot := getenv("CGROUP_ROOT", cgroupRootDefault)
 	targetPath := getenv("PF_TARGET_CGROUP", gockerPathDefault)
@@ -358,23 +386,51 @@ func main() {
 
 	var (
 		allowedMu    sync.RWMutex
-		allowed      map[uint64]struct{}
+		allowed      map[uint64]string
 		allowedCount int
 	)
+	memoryLast := make(map[uint64]memCounters)
+	psiLastCPU := make(map[uint64]psiCounters)
+	psiLastIO := make(map[uint64]psiCounters)
+	psiLastMem := make(map[uint64]psiCounters)
+
+	pruneState := func(set map[uint64]string) {
+		for cgid := range memoryLast {
+			if _, ok := set[cgid]; !ok {
+				delete(memoryLast, cgid)
+			}
+		}
+		for cgid := range psiLastCPU {
+			if _, ok := set[cgid]; !ok {
+				delete(psiLastCPU, cgid)
+			}
+		}
+		for cgid := range psiLastIO {
+			if _, ok := set[cgid]; !ok {
+				delete(psiLastIO, cgid)
+			}
+		}
+		for cgid := range psiLastMem {
+			if _, ok := set[cgid]; !ok {
+				delete(psiLastMem, cgid)
+			}
+		}
+	}
 	refreshAllowed := func() {
 		set, err := collectAllowed(targetPath)
 		if err != nil {
 			log.Printf("collect allowed from %s: %v", targetPath, err)
 		}
 		if set == nil {
-			set = make(map[uint64]struct{})
+			set = make(map[uint64]string)
 		}
 		if len(set) == 0 {
-			set[cfg0.TargetCgid] = struct{}{}
+			set[cfg0.TargetCgid] = targetPath
 		}
 		allowedMu.Lock()
 		allowed = set
 		allowedMu.Unlock()
+		pruneState(set)
 		if len(set) != allowedCount {
 			allowedCount = len(set)
 			log.Printf("allowed cgroup whitelist size=%d", allowedCount)
@@ -477,14 +533,26 @@ func main() {
 	lastSysSum := make(lastMap, 16384)
 	lastCPU := make(lastMap, 4096)
 
-	allowedHas := func(cgid uint64) bool {
+	allowedPath := func(cgid uint64) (string, bool) {
 		allowedMu.RLock()
 		defer allowedMu.RUnlock()
 		if allowed == nil {
-			return false
+			return "", false
 		}
-		_, ok := allowed[cgid]
-		return ok
+		path, ok := allowed[cgid]
+		return path, ok
+	}
+	snapshotAllowed := func() map[uint64]string {
+		allowedMu.RLock()
+		defer allowedMu.RUnlock()
+		if allowed == nil {
+			return nil
+		}
+		out := make(map[uint64]string, len(allowed))
+		for cgid, path := range allowed {
+			out[cgid] = path
+		}
+		return out
 	}
 
 	scan := func(m *ebpf.Map, last lastMap, apply func(k cgKey, delta uint64)) {
@@ -498,7 +566,7 @@ func main() {
 			for _, v := range val {
 				total += v
 			}
-			if !allowedHas(k.Cgid) {
+			if _, ok := allowedPath(k.Cgid); !ok {
 				delete(last, k)
 				continue
 			}
@@ -513,6 +581,179 @@ func main() {
 		}
 		if err := it.Err(); err != nil {
 			log.Printf("iterate map: %v", err)
+		}
+	}
+
+	readMemoryStat := func(dir string) (uint64, uint64, error) {
+		f, err := os.Open(filepath.Join(dir, "memory.stat"))
+		if err != nil {
+			return 0, 0, err
+		}
+		defer f.Close()
+
+		var pgfault, pgmaj uint64
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			fields := strings.Fields(sc.Text())
+			if len(fields) != 2 {
+				continue
+			}
+			val, err := strconv.ParseUint(fields[1], 10, 64)
+			if err != nil {
+				continue
+			}
+			switch fields[0] {
+			case "pgfault":
+				pgfault = val
+			case "pgmajfault":
+				pgmaj = val
+			}
+		}
+		if err := sc.Err(); err != nil {
+			return 0, 0, err
+		}
+		return pgfault, pgmaj, nil
+	}
+
+	readPSI := func(file string) (uint64, uint64, error) {
+		f, err := os.Open(file)
+		if err != nil {
+			return 0, 0, err
+		}
+		defer f.Close()
+
+		var some, full uint64
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			fields := strings.Fields(sc.Text())
+			if len(fields) == 0 {
+				continue
+			}
+			level := fields[0]
+			for _, token := range fields[1:] {
+				if !strings.HasPrefix(token, "total=") {
+					continue
+				}
+				val, err := strconv.ParseUint(strings.TrimPrefix(token, "total="), 10, 64)
+				if err != nil {
+					continue
+				}
+				if level == "some" {
+					some = val
+				} else if level == "full" {
+					full = val
+				}
+			}
+		}
+		if err := sc.Err(); err != nil {
+			return 0, 0, err
+		}
+		return some, full, nil
+	}
+
+	updateMemory := func() {
+		paths := snapshotAllowed()
+		if len(paths) == 0 {
+			return
+		}
+		for cgid, dir := range paths {
+			if cgid == cfg0.TargetCgid {
+				continue
+			}
+			pgfault, pgmaj, err := readMemoryStat(dir)
+			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					log.Printf("read memory.stat for %s: %v", dir, err)
+				}
+				continue
+			}
+			var pgminor uint64
+			if pgfault >= pgmaj {
+				pgminor = pgfault - pgmaj
+			}
+			if prev, ok := memoryLast[cgid]; ok {
+				id := strconv.FormatUint(cgid, 10)
+				if pgmaj >= prev.Major {
+					d := pgmaj - prev.Major
+					if d > 0 {
+						memoryFaults.WithLabelValues("major", id).Add(float64(d))
+					}
+				}
+				if pgminor >= prev.Minor {
+					d := pgminor - prev.Minor
+					if d > 0 {
+						memoryFaults.WithLabelValues("minor", id).Add(float64(d))
+					}
+				}
+			}
+			memoryLast[cgid] = memCounters{Major: pgmaj, Minor: pgminor}
+		}
+	}
+
+	updatePSI := func() {
+		paths := snapshotAllowed()
+		if len(paths) == 0 {
+			return
+		}
+		for cgid, dir := range paths {
+			if cgid == cfg0.TargetCgid {
+				continue
+			}
+			id := strconv.FormatUint(cgid, 10)
+
+			if some, full, err := readPSI(filepath.Join(dir, "cpu.pressure")); err == nil {
+				if prev, ok := psiLastCPU[cgid]; ok {
+					if some >= prev.Some {
+						if d := some - prev.Some; d > 0 {
+							psiCPU.WithLabelValues("some", id).Add(float64(d) / 1e6)
+						}
+					}
+					if full >= prev.Full {
+						if d := full - prev.Full; d > 0 {
+							psiCPU.WithLabelValues("full", id).Add(float64(d) / 1e6)
+						}
+					}
+				}
+				psiLastCPU[cgid] = psiCounters{Some: some, Full: full}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				log.Printf("read cpu.pressure for %s: %v", dir, err)
+			}
+
+			if some, full, err := readPSI(filepath.Join(dir, "io.pressure")); err == nil {
+				if prev, ok := psiLastIO[cgid]; ok {
+					if some >= prev.Some {
+						if d := some - prev.Some; d > 0 {
+							psiIO.WithLabelValues("some", id).Add(float64(d) / 1e6)
+						}
+					}
+					if full >= prev.Full {
+						if d := full - prev.Full; d > 0 {
+							psiIO.WithLabelValues("full", id).Add(float64(d) / 1e6)
+						}
+					}
+				}
+				psiLastIO[cgid] = psiCounters{Some: some, Full: full}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				log.Printf("read io.pressure for %s: %v", dir, err)
+			}
+
+			if some, full, err := readPSI(filepath.Join(dir, "memory.pressure")); err == nil {
+				if prev, ok := psiLastMem[cgid]; ok {
+					if some >= prev.Some {
+						if d := some - prev.Some; d > 0 {
+							psiMemory.WithLabelValues("some", id).Add(float64(d) / 1e6)
+						}
+					}
+					if full >= prev.Full {
+						if d := full - prev.Full; d > 0 {
+							psiMemory.WithLabelValues("full", id).Add(float64(d) / 1e6)
+						}
+					}
+				}
+				psiLastMem[cgid] = psiCounters{Some: some, Full: full}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				log.Printf("read memory.pressure for %s: %v", dir, err)
+			}
 		}
 	}
 
@@ -536,5 +777,7 @@ func main() {
 		scan(cpu.MapNs, lastCPU, func(k cgKey, d uint64) {
 			cpuSched.WithLabelValues(labelCPU(k.Type), fmt.Sprintf("%d", k.Cgid)).Add(float64(d))
 		})
+		updateMemory()
+		updatePSI()
 	}
 }
