@@ -55,7 +55,7 @@
       "title": "CPU Utilization (cores)",
       "targets": [
         {
-          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\", cgroup_id=~\"$cgroup_id\"}[1m])) / 1e9",
+          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\"}[1m])) / 1e9",
           "legendFormat": "{{cgroup_id}}"
         }
       ],
@@ -67,7 +67,7 @@
       "title": "Run Queue Wait Share",
       "targets": [
         {
-          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"wait\", cgroup_id=~\"$cgroup_id\"}[1m])) / (sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\", cgroup_id=~\"$cgroup_id\"}[1m])) + sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"wait\", cgroup_id=~\"$cgroup_id\"}[1m])))",
+          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"wait\"}[1m])) / (sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\"}[1m])) + sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"wait\"}[1m])))",
           "legendFormat": "{{cgroup_id}}"
         }
       ],
@@ -79,7 +79,7 @@
       "title": "I/O Wait Share",
       "targets": [
         {
-          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"iowait\", cgroup_id=~\"$cgroup_id\"}[1m])) / (sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\", cgroup_id=~\"$cgroup_id\"}[1m])) + sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"iowait\", cgroup_id=~\"$cgroup_id\"}[1m])))",
+          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"iowait\"}[1m])) / (sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\"}[1m])) + sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"iowait\"}[1m])))",
           "legendFormat": "{{cgroup_id}}"
         }
       ],
