@@ -4,7 +4,11 @@ A. 安裝先決套件（以 Debian/Ubuntu 為例）
 sudo apt-get install -y clang llvm bpftool curl
 ```
 
-B. 準備並啟動
+B. 開啟 Linux 核心的排程統計功能（sched_schedstats），才可以在eBPF 或 /proc/schedstat 之類的介面中讀到詳細的 scheduler runtime/wait/iowait 統計。
+```
+sudo sysctl kernel.sched_schedstats=1
+```
+C. 啟動
 ```
 sudo PF_TARGET_CGROUP=/sys/fs/cgroup/gocker PF_SAMPLE_RATE=1 ./collector
 ```
@@ -13,17 +17,17 @@ or
 bash run.sh
 ```
 
-C. 驗證 Exporter
+D. 驗證 Exporter
 ```
 curl -s localhost:2112/metrics | egrep 'page_faults_total|sched_events_total|syscall_.*_total' | head
 ```
 
-D. 啟動 Grafana 並匯入 Dashboard
+E. 啟動 Grafana 並匯入 Dashboard
 grafana-server web
 瀏覽 http://localhost:3000（預設帳密 admin/admin）
  → “+” → Import → 選 grafana-dashboard.json → 選取「Prometheus」資料源
 
-E. 熱更新參數（可選）
+F. 熱更新參數（可選）
 *  把 sample_rate 改 10（降低事件量）
 ```
 curl -XPOST -H 'Content-Type: application/json' \
