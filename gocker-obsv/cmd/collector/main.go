@@ -112,7 +112,6 @@ func labelSC(t uint32) string {
 	}
 	return "unknown"
 }
-func labelSys(sysnr uint32) string { return fmt.Sprintf("%d", sysnr) }
 func labelCPU(t uint32) string {
 	switch t {
 	case 1:

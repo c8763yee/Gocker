@@ -102,7 +102,7 @@
     {
       "type": "timeseries",
       "title": "Syscall Rate (per container & syscall)",
-      "targets": [{ "expr": "sum by (cgroup_id, syscall) (rate(syscall_calls_total[30s]))", "legendFormat": "sys={{syscall}} {{cgroup_id}}" }],
+      "targets": [{ "expr": "sum by (cgroup_id, syscall) (rate(syscall_calls_total[30s]))", "legendFormat": "{{syscall}} {{cgroup_id}}" }],
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 34 },
       "fieldConfig": { "defaults": { "unit": "calls/s" } }
     },
@@ -112,7 +112,7 @@
       "targets": [
         {
           "expr": "(sum by (cgroup_id, syscall) (rate(syscall_latency_nanoseconds_total[30s]))) / ignoring() (sum by (cgroup_id, syscall) (rate(syscall_calls_total[30s])))",
-          "legendFormat": "sys={{syscall}} {{cgroup_id}}"
+          "legendFormat": "{{syscall}} {{cgroup_id}}"
         }
       ],
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 42 },
