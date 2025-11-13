@@ -76,6 +76,17 @@ var (
 		prometheus.CounterOpts{Name: "cpu_sched_ns_total", Help: "Per-cgroup scheduler time buckets (ns)."},
 		[]string{"type", "cgroup_id"},
 	)
+	memEvents = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "mm_vmscan_events_total", Help: "Per-cgroup vmscan events."},
+		[]string{"type", "cgroup_id"},
+	)
+	memPages = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "mm_vmscan_pages_total", Help: "Per-cgroup reclaimed pages."},
+		[]string{"type", "cgroup_id"},
+	)
+	kswapdWakeups = prometheus.NewCounter(
+		prometheus.CounterOpts{Name: "mm_vmscan_kswapd_wake_total", Help: "System-wide kswapd wakeups."},
+	)
 	memoryFaults = prometheus.NewCounterVec(
 		prometheus.CounterOpts{Name: "memory_page_faults_total", Help: "Per-cgroup major/minor page faults from memory.stat."},
 		[]string{"type", "cgroup_id"},
@@ -123,6 +134,18 @@ func labelCPU(t uint32) string {
 	default:
 		return "unknown"
 	}
+}
+func labelMemEvent(t uint32) string {
+	if t == 1 {
+		return "direct_reclaim"
+	}
+	return "unknown"
+}
+func labelMemPages(t uint32) string {
+	if t == 1 {
+		return "reclaim_pages"
+	}
+	return "unknown"
 }
 
 func getenv(key, def string) string {
@@ -234,6 +257,15 @@ type cpuModule struct {
 	MapNs  *ebpf.Map     `ebpf:"cg_cpu_ns"`
 	Cfg    *ebpf.Map     `ebpf:"cfg_map"`
 }
+type memModule struct {
+	Kswapd    *ebpf.Program `ebpf:"tp_mm_vmscan_kswapd_wake"`
+	Direct    *ebpf.Program `ebpf:"tp_mm_vmscan_direct_reclaim_begin"`
+	Reclaim   *ebpf.Program `ebpf:"tp_mm_vmscan_reclaim_pages"`
+	MapEvt    *ebpf.Map     `ebpf:"cg_mem_evt"`
+	MapPages  *ebpf.Map     `ebpf:"cg_mem_pages"`
+	MapKswapd *ebpf.Map     `ebpf:"kswapd_cnt"`
+	Cfg       *ebpf.Map     `ebpf:"cfg_map"`
+}
 
 func loadModule(path string, rew map[string]interface{}, out interface{}) (func(), error) {
 	b, err := os.ReadFile(path)
@@ -322,6 +354,28 @@ func loadModule(path string, rew map[string]interface{}, out interface{}) (func(
 			if m.Cfg != nil {
 				m.Cfg.Close()
 			}
+		case *memModule:
+			if m.Kswapd != nil {
+				m.Kswapd.Close()
+			}
+			if m.Direct != nil {
+				m.Direct.Close()
+			}
+			if m.Reclaim != nil {
+				m.Reclaim.Close()
+			}
+			if m.MapEvt != nil {
+				m.MapEvt.Close()
+			}
+			if m.MapPages != nil {
+				m.MapPages.Close()
+			}
+			if m.MapKswapd != nil {
+				m.MapKswapd.Close()
+			}
+			if m.Cfg != nil {
+				m.Cfg.Close()
+			}
 		}
 	}, nil
 }
@@ -358,12 +412,16 @@ func writeCfgAll(c cfg, mods ...interface{}) {
 			if mo != nil && mo.Cfg != nil {
 				_ = mo.Cfg.Update(&key, &c, ebpf.UpdateAny)
 			}
+		case *memModule:
+			if mo != nil && mo.Cfg != nil {
+				_ = mo.Cfg.Update(&key, &c, ebpf.UpdateAny)
+			}
 		}
 	}
 }
 
 func main() {
-	prometheus.MustRegister(pageFaults, schedEvents, sysCalls, sysLatency, cpuSched, memoryFaults, psiCPU, psiIO, psiMemory)
+	prometheus.MustRegister(pageFaults, schedEvents, sysCalls, sysLatency, cpuSched, memEvents, memPages, kswapdWakeups, memoryFaults, psiCPU, psiIO, psiMemory)
 
 	cgroupRoot := getenv("CGROUP_ROOT", cgroupRootDefault)
 	targetPath := getenv("PF_TARGET_CGROUP", gockerPathDefault)
@@ -445,6 +503,7 @@ func main() {
 	var sched schedModule
 	var sys sysModule
 	var cpu cpuModule
+	var mem memModule
 
 	rew := map[string]interface{}{"SAMPLE_RATE": uint32(sampleRate), "ENABLE_FILTER": uint32(1), "TARGET_LEVEL": uint32(level), "TARGET_CGID": uint64(tgid)}
 	if closer, err := loadModule("bpf/pf.bpf.o", rew, &pf); err != nil {
@@ -467,8 +526,13 @@ func main() {
 	} else {
 		defer closer()
 	}
+	if closer, err := loadModule("bpf/mem.bpf.o", rew, &mem); err != nil {
+		log.Printf("mem module skipped: %v", err)
+	} else {
+		defer closer()
+	}
 
-	writeCfgAll(cfg0, &pf, &sched, &sys, &cpu)
+	writeCfgAll(cfg0, &pf, &sched, &sys, &cpu, &mem)
 
 	links := []link.Link{
 		attachTracepoint("exceptions", "page_fault_user", pf.ProgU),
@@ -483,6 +547,9 @@ func main() {
 		attachTracepoint("sched", "sched_stat_iowait", cpu.IO),
 		attachTracepoint("sched", "sched_switch", cpu.Switch),
 		attachTracepoint("sched", "sched_process_exit", cpu.Exit),
+		attachTracepoint("vmscan", "mm_vmscan_kswapd_wake", mem.Kswapd),
+		attachTracepoint("vmscan", "mm_vmscan_direct_reclaim_begin", mem.Direct),
+		attachTracepoint("vmscan", "mm_vmscan_reclaim_pages", mem.Reclaim),
 	}
 	defer func() {
 		for _, l := range links {
@@ -516,7 +583,7 @@ func main() {
 			in.EnableFilter = 1
 		}
 		cfg0 = in
-		writeCfgAll(cfg0, &pf, &sched, &sys, &cpu)
+		writeCfgAll(cfg0, &pf, &sched, &sys, &cpu, &mem)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 		log.Printf("config updated: %+v", cfg0)
@@ -534,6 +601,9 @@ func main() {
 	lastSysCnt := make(lastMap, 16384)
 	lastSysSum := make(lastMap, 16384)
 	lastCPU := make(lastMap, 4096)
+	lastMemEvt := make(lastMap, 1024)
+	lastMemPages := make(lastMap, 1024)
+	var lastKswapd uint64
 
 	allowedPath := func(cgid uint64) (string, bool) {
 		allowedMu.RLock()
@@ -585,6 +655,29 @@ func main() {
 		if err := it.Err(); err != nil {
 			log.Printf("iterate map: %v", err)
 		}
+	}
+
+	scanArray := func(m *ebpf.Map, last *uint64, apply func(delta uint64)) {
+		if m == nil {
+			return
+		}
+		var key uint32
+		if err := m.Lookup(&key, &val); err != nil {
+			if err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+				log.Printf("lookup array map: %v", err)
+			}
+			return
+		}
+		var total uint64
+		for _, v := range val {
+			total += v
+		}
+		if total >= *last {
+			if d := total - *last; d > 0 {
+				apply(d)
+			}
+		}
+		*last = total
 	}
 
 	readMemoryStat := func(dir string) (uint64, uint64, error) {
@@ -781,6 +874,15 @@ func main() {
 		})
 		scan(cpu.MapNs, lastCPU, func(k cgKey, d uint64) {
 			cpuSched.WithLabelValues(labelCPU(k.Type), fmt.Sprintf("%d", k.Cgid)).Add(float64(d))
+		})
+		scan(mem.MapEvt, lastMemEvt, func(k cgKey, d uint64) {
+			memEvents.WithLabelValues(labelMemEvent(k.Type), fmt.Sprintf("%d", k.Cgid)).Add(float64(d))
+		})
+		scan(mem.MapPages, lastMemPages, func(k cgKey, d uint64) {
+			memPages.WithLabelValues(labelMemPages(k.Type), fmt.Sprintf("%d", k.Cgid)).Add(float64(d))
+		})
+		scanArray(mem.MapKswapd, &lastKswapd, func(d uint64) {
+			kswapdWakeups.Add(float64(d))
 		})
 		updateMemory()
 		updatePSI()

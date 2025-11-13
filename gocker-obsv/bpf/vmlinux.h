@@ -20216,8 +20216,9 @@ enum kvm_only_cpuid_leafs {
 	CPUID_8000_0022_EAX = 25,
 	CPUID_7_2_EDX = 26,
 	CPUID_24_0_EBX = 27,
-	NR_KVM_CPU_CAPS = 28,
-	NKVMCAPINTS = 6,
+	CPUID_8000_0021_ECX = 28,
+	NR_KVM_CPU_CAPS = 29,
+	NKVMCAPINTS = 7,
 };
 
 enum kvm_reg {
@@ -27073,6 +27074,11 @@ enum squashfs_param {
 	Opt_threads = 1,
 };
 
+enum sr_retry_flags {
+	IO_SR_MSG_RETRY = 1,
+	IO_SR_MSG_PARTIAL_MAP = 2,
+};
+
 enum srbds_mitigations {
 	SRBDS_MITIGATION_OFF = 0,
 	SRBDS_MITIGATION_UCODE_NEEDED = 1,
@@ -28616,6 +28622,14 @@ enum transparent_hugepage_flag {
 	TRANSPARENT_HUGEPAGE_USE_ZERO_PAGE_FLAG = 8,
 };
 
+enum tsa_mitigations {
+	TSA_MITIGATION_NONE = 0,
+	TSA_MITIGATION_UCODE_NEEDED = 1,
+	TSA_MITIGATION_USER_KERNEL = 2,
+	TSA_MITIGATION_VM = 3,
+	TSA_MITIGATION_FULL = 4,
+};
+
 enum tsq_enum {
 	TSQ_THROTTLED = 0,
 	TSQ_QUEUED = 1,
@@ -29715,6 +29729,13 @@ enum vmscan_throttle_state {
 	VMSCAN_THROTTLE_NOPROGRESS = 2,
 	VMSCAN_THROTTLE_CONGESTED = 3,
 	NR_VMSCAN_THROTTLE = 4,
+};
+
+enum vmscape_mitigations {
+	VMSCAPE_MITIGATION_NONE = 0,
+	VMSCAPE_MITIGATION_AUTO = 1,
+	VMSCAPE_MITIGATION_IBPB_EXIT_TO_USER = 2,
+	VMSCAPE_MITIGATION_IBPB_ON_VMEXIT = 3,
 };
 
 enum vmx_feature_leafs {
@@ -31939,6 +31960,15 @@ typedef struct {
 typedef struct {
 	void *lock;
 } class_jump_label_lock_t;
+
+struct perf_cpu_context;
+
+struct perf_event_context;
+
+typedef struct {
+	struct perf_cpu_context *cpuctx;
+	struct perf_event_context *ctx;
+} class_perf_ctx_lock_t;
 
 typedef struct {
 	void *lock;
@@ -53727,6 +53757,7 @@ struct buf_sel_arg {
 	size_t max_len;
 	short unsigned int nr_iovs;
 	short unsigned int mode;
+	short unsigned int partial_map;
 };
 
 struct buffer_data_page {
@@ -73090,10 +73121,6 @@ struct event_filter {
 	char *filter_string;
 };
 
-struct perf_cpu_context;
-
-struct perf_event_context;
-
 typedef void (*event_f)(struct perf_event *, struct perf_cpu_context *, struct perf_event_context *, void *);
 
 struct event_function_struct {
@@ -76849,6 +76876,11 @@ struct files_struct {
 	long: 64;
 	long: 64;
 	long: 64;
+};
+
+struct filter_head {
+	struct list_head list;
+	struct callback_head rcu;
 };
 
 struct filter_list {
@@ -88427,10 +88459,8 @@ struct pinctrl_desc {
 	bool link_consumers;
 };
 
-struct intel_community_context;
-
 struct intel_pinctrl_context {
-	struct intel_pad_context *pads;
+	struct intel_pad_context___3 *pads;
 	struct intel_community_context *communities;
 };
 
@@ -88449,8 +88479,10 @@ struct intel_pinctrl {
 	int irq;
 };
 
+struct intel_community_context;
+
 struct intel_pinctrl_context___2 {
-	struct intel_pad_context___3 *pads;
+	struct intel_pad_context *pads;
 	struct intel_community_context *communities;
 };
 
@@ -89244,6 +89276,7 @@ struct io_imu_folio_data {
 	unsigned int nr_pages_mid;
 	unsigned int folio_shift;
 	unsigned int nr_folios;
+	long unsigned int first_folio_page_idx;
 };
 
 struct io_uring_sqe;
@@ -89784,7 +89817,7 @@ struct io_sr_msg {
 	u16 flags;
 	u16 buf_group;
 	u16 buf_index;
-	bool retry;
+	short unsigned int retry_flags;
 	bool imported;
 	void *msg_control;
 	struct io_kiocb *notif;
@@ -92701,6 +92734,11 @@ struct isoch_data {
 struct itimerspec64 {
 	struct timespec64 it_interval;
 	struct timespec64 it_value;
+};
+
+struct its_array {
+	void **pages;
+	int num;
 };
 
 struct ivhd_dte_flags {
@@ -96118,7 +96156,7 @@ struct kvm_vcpu_arch {
 	int cpuid_nent;
 	struct kvm_cpuid_entry2 *cpuid_entries;
 	bool is_amd_compatible;
-	u32 cpu_caps[28];
+	u32 cpu_caps[29];
 	u64 reserved_gpa_bits;
 	int maxphyaddr;
 	struct x86_emulate_ctxt *emulate_ctxt;
@@ -101840,7 +101878,9 @@ struct mnt_pcp {
 	int mnt_writers;
 };
 
-struct mod_arch_specific {};
+struct mod_arch_specific {
+	struct its_array its_pages;
+};
 
 struct mod_initfree {
 	struct llist_node node;
@@ -102004,12 +102044,9 @@ struct module {
 	struct list_head target_list;
 	void (*exit)(void);
 	atomic_t refcnt;
-	int its_num_pages;
-	void **its_page_array;
 	struct error_injection_entry *ei_funcs;
 	unsigned int num_ei_funcs;
 	struct _ddebug_info dyndbg_info;
-	long: 64;
 	long: 64;
 	long: 64;
 	long: 64;
@@ -132819,7 +132856,7 @@ struct tcp_sock {
 		u64 time;
 	} rcv_rtt_est;
 	struct {
-		u32 space;
+		int space;
 		u32 seq;
 		u64 time;
 	} rcvq_space;
@@ -146312,6 +146349,7 @@ struct usb_device {
 	unsigned int reset_resume: 1;
 	unsigned int port_is_suspended: 1;
 	enum usb_link_tunnel_mode tunnel_mode;
+	struct device_link *usb4_link;
 	int slot_id;
 	struct usb2_lpm_parameters l1_params;
 	struct usb3_lpm_parameters u1_params;
