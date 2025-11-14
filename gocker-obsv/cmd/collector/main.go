@@ -84,6 +84,14 @@ var (
 		prometheus.CounterOpts{Name: "mm_vmscan_pages_total", Help: "Per-cgroup reclaimed pages."},
 		[]string{"type", "cgroup_id"},
 	)
+	pageAllocBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "mm_page_alloc_bytes_total", Help: "Per-cgroup page allocation bytes."},
+		[]string{"cgroup_id"},
+	)
+	pageFreeBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "mm_page_free_bytes_total", Help: "Per-cgroup page free bytes."},
+		[]string{"cgroup_id"},
+	)
 	kswapdWakeups = prometheus.NewCounter(
 		prometheus.CounterOpts{Name: "mm_vmscan_kswapd_wake_total", Help: "System-wide kswapd wakeups."},
 	)
@@ -103,6 +111,11 @@ var (
 		prometheus.CounterOpts{Name: "psi_memory_stall_seconds_total", Help: "Per-cgroup memory pressure stall time (seconds)."},
 		[]string{"level", "cgroup_id"},
 	)
+)
+
+const (
+	memBytesAllocType = 1
+	memBytesFreeType  = 2
 )
 
 func labelPF(t uint32) string {
@@ -261,8 +274,11 @@ type memModule struct {
 	Kswapd    *ebpf.Program `ebpf:"tp_mm_vmscan_kswapd_wake"`
 	Direct    *ebpf.Program `ebpf:"tp_mm_vmscan_direct_reclaim_begin"`
 	Reclaim   *ebpf.Program `ebpf:"tp_mm_vmscan_reclaim_pages"`
+	Alloc     *ebpf.Program `ebpf:"tp_mm_page_alloc"`
+	Free      *ebpf.Program `ebpf:"tp_mm_page_free"`
 	MapEvt    *ebpf.Map     `ebpf:"cg_mem_evt"`
 	MapPages  *ebpf.Map     `ebpf:"cg_mem_pages"`
+	MapBytes  *ebpf.Map     `ebpf:"cg_mem_bytes"`
 	MapKswapd *ebpf.Map     `ebpf:"kswapd_cnt"`
 	Cfg       *ebpf.Map     `ebpf:"cfg_map"`
 }
@@ -364,11 +380,20 @@ func loadModule(path string, rew map[string]interface{}, out interface{}) (func(
 			if m.Reclaim != nil {
 				m.Reclaim.Close()
 			}
+			if m.Alloc != nil {
+				m.Alloc.Close()
+			}
+			if m.Free != nil {
+				m.Free.Close()
+			}
 			if m.MapEvt != nil {
 				m.MapEvt.Close()
 			}
 			if m.MapPages != nil {
 				m.MapPages.Close()
+			}
+			if m.MapBytes != nil {
+				m.MapBytes.Close()
 			}
 			if m.MapKswapd != nil {
 				m.MapKswapd.Close()
@@ -421,7 +446,7 @@ func writeCfgAll(c cfg, mods ...interface{}) {
 }
 
 func main() {
-	prometheus.MustRegister(pageFaults, schedEvents, sysCalls, sysLatency, cpuSched, memEvents, memPages, kswapdWakeups, memoryFaults, psiCPU, psiIO, psiMemory)
+	prometheus.MustRegister(pageFaults, schedEvents, sysCalls, sysLatency, cpuSched, memEvents, memPages, pageAllocBytes, pageFreeBytes, kswapdWakeups, memoryFaults, psiCPU, psiIO, psiMemory)
 
 	cgroupRoot := getenv("CGROUP_ROOT", cgroupRootDefault)
 	targetPath := getenv("PF_TARGET_CGROUP", gockerPathDefault)
@@ -550,6 +575,8 @@ func main() {
 		attachTracepoint("vmscan", "mm_vmscan_kswapd_wake", mem.Kswapd),
 		attachTracepoint("vmscan", "mm_vmscan_direct_reclaim_begin", mem.Direct),
 		attachTracepoint("vmscan", "mm_vmscan_reclaim_pages", mem.Reclaim),
+		attachTracepoint("kmem", "mm_page_alloc", mem.Alloc),
+		attachTracepoint("kmem", "mm_page_free", mem.Free),
 	}
 	defer func() {
 		for _, l := range links {
@@ -603,6 +630,7 @@ func main() {
 	lastCPU := make(lastMap, 4096)
 	lastMemEvt := make(lastMap, 1024)
 	lastMemPages := make(lastMap, 1024)
+	lastMemBytes := make(lastMap, 1024)
 	var lastKswapd uint64
 
 	allowedPath := func(cgid uint64) (string, bool) {
@@ -880,6 +908,15 @@ func main() {
 		})
 		scan(mem.MapPages, lastMemPages, func(k cgKey, d uint64) {
 			memPages.WithLabelValues(labelMemPages(k.Type), fmt.Sprintf("%d", k.Cgid)).Add(float64(d))
+		})
+		scan(mem.MapBytes, lastMemBytes, func(k cgKey, d uint64) {
+			id := fmt.Sprintf("%d", k.Cgid)
+			switch k.Type {
+			case memBytesAllocType:
+				pageAllocBytes.WithLabelValues(id).Add(float64(d))
+			case memBytesFreeType:
+				pageFreeBytes.WithLabelValues(id).Add(float64(d))
+			}
 		})
 		scanArray(mem.MapKswapd, &lastKswapd, func(d uint64) {
 			kswapdWakeups.Add(float64(d))

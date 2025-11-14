@@ -43,9 +43,3 @@ else
   sleep 2
   echo "[OK] Prometheus http://localhost:9090"
 fi
-
-echo
-echo "下一步："
-echo "1) 自行啟動 Grafana（grafana-server web），瀏覽 http://localhost:3000"
-echo "2) 在 Grafana → Import → 上傳 grafana-dashboard.json → 選 Prometheus 資料源"
-echo "3) 開始觀察 PageFault / Sched / Syscall 圖表！"

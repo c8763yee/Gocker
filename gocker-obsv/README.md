@@ -38,6 +38,13 @@ curl -XPOST -H 'Content-Type: application/json' \
 ./ctl --sample 10
 ```
 
+G. 備註
+查看container 的 cgroup id
+```
+stat -Lc '%i' /sys/fs/cgroup/gocker/container_name 
+```
+
+
 ## Metrics 說明（Exporter /metrics）
 
 - page_faults_total{type,cgroup_id}
@@ -77,6 +84,27 @@ curl -XPOST -H 'Content-Type: application/json' \
 - syscall_latency_nanoseconds_total{syscall,cgroup_id}
   - 來源：enter/exit 間加總延遲（map `cg_sys_lat_ns`）；性質：Counter（ns）
   - 平均延遲（ns）：`(sum by (cgroup_id,syscall)(rate(syscall_latency_nanoseconds_total[30s]))) / ignoring() (sum by (cgroup_id,syscall)(rate(syscall_calls_total[30s])))`
+
+- mm_vmscan_events_total{type,cgroup_id}
+  - 來源：tracepoint `vmscan/mm_vmscan_direct_reclaim_begin`（map `cg_mem_evt`）；目前 type 僅 `direct_reclaim`，表示該容器為了配置記憶體而進行直接回收的次數
+  - 常用：`sum by (cgroup_id)(rate(mm_vmscan_events_total{type="direct_reclaim"}[$__rate_interval]))`
+
+- mm_vmscan_pages_total{type,cgroup_id}
+  - 來源：tracepoint `vmscan/mm_vmscan_reclaim_pages`（map `cg_mem_pages`）；`type="reclaim_pages"` 代表在回收流程中掃到的頁數
+  - 常用：`sum by (cgroup_id)(rate(mm_vmscan_pages_total{type="reclaim_pages"}[$__rate_interval]))`
+  - 回收效率：`clamp_min( sum(rate(mm_vmscan_pages_total{type="reclaim_pages"}[$__rate_interval])) / sum(rate(mm_vmscan_events_total{type="direct_reclaim"}[$__rate_interval])), 0 )`
+
+- mm_page_alloc_bytes_total{cgroup_id} / mm_page_free_bytes_total{cgroup_id}
+  - 來源：tracepoint `kmem/mm_page_alloc`、`kmem/mm_page_free`；order 轉成 bytes 後依 cgroup 累計（map `cg_mem_bytes`）
+  - 代表該容器透過 buddy allocator 配置 / 釋放的 base page bytes；視圖表需求可在 PromQL 中除以 4096（或 node_memory_PageSize_bytes）換算成 pages/s
+  - 範例：
+    - Allocation pages/s：`sum by (cgroup_id)(rate(mm_page_alloc_bytes_total[$__rate_interval])) / 4096`
+    - Free pages/s：`sum by (cgroup_id)(rate(mm_page_free_bytes_total[$__rate_interval])) / 4096`
+    - Net allocation（bytes/s）：`sum(rate(mm_page_alloc_bytes_total[$__rate_interval])) - sum(rate(mm_page_free_bytes_total[$__rate_interval]))`
+
+- mm_vmscan_kswapd_wake_total
+  - 來源：tracepoint `vmscan/mm_vmscan_kswapd_wake`（map `kswapd_cnt`）；為全系統 Counter，表示 kswapd 被喚醒的次數
+  - 常用：`rate(mm_vmscan_kswapd_wake_total[$__rate_interval])`；若值持續升高表示系統整體記憶體壓力大
 
 附註與建議：
 - 只計 `/sys/fs/cgroup/gocker` 子樹（collector 內建白名單），可用 `/admin/config` 調整目標。

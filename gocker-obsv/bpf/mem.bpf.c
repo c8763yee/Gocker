@@ -4,6 +4,10 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+#ifndef PAGE_SHIFT
+#define PAGE_SHIFT 12
+#endif
+
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 const volatile __u32 SAMPLE_RATE   = 1;
@@ -21,6 +25,7 @@ struct {
 
 enum mem_evt_type { MEM_EVT_DIRECT = 1 };
 enum mem_page_type { MEM_PAGES_RECLAIM = 1 };
+enum mem_bytes_type { MEM_BYTES_ALLOC = 1, MEM_BYTES_FREE = 2 };
 
 struct cg_key { __u64 cgid; __u32 type; __u32 pad; };
 
@@ -37,6 +42,13 @@ struct {
     __type(key, struct cg_key);
     __type(value, __u64);
 } cg_mem_pages SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+    __uint(max_entries, 4096);
+    __type(key, struct cg_key);
+    __type(value, __u64);
+} cg_mem_bytes SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -128,6 +140,15 @@ static __always_inline int inc_kswapd(void)
     return 0;
 }
 
+static __always_inline __u64 order_to_bytes(unsigned int order)
+{
+    if (order >= 32) {
+        order = 31;
+    }
+    __u64 pages = 1ULL << order;
+    return pages << PAGE_SHIFT;
+}
+
 SEC("tracepoint/vmscan/mm_vmscan_kswapd_wake")
 int tp_mm_vmscan_kswapd_wake(struct trace_event_raw_mm_vmscan_kswapd_wake *ctx)
 {
@@ -162,4 +183,38 @@ int tp_mm_vmscan_reclaim_pages(struct trace_event_raw_mm_vmscan_reclaim_pages *c
     __u64 cgid = bpf_get_current_cgroup_id();
     __u64 reclaimed = ctx->nr_reclaimed;
     return add_cg_u64((struct bpf_map *)&cg_mem_pages, cgid, MEM_PAGES_RECLAIM, reclaimed);
+}
+
+SEC("tracepoint/kmem/mm_page_alloc")
+int tp_mm_page_alloc(struct trace_event_raw_mm_page_alloc *ctx)
+{
+    if (!in_target_subtree_current()) {
+        return 0;
+    }
+    if (!pass_sample()) {
+        return 0;
+    }
+    __u64 cgid = bpf_get_current_cgroup_id();
+    __u64 bytes = order_to_bytes(ctx->order);
+    if (!bytes) {
+        return 0;
+    }
+    return add_cg_u64((struct bpf_map *)&cg_mem_bytes, cgid, MEM_BYTES_ALLOC, bytes);
+}
+
+SEC("tracepoint/kmem/mm_page_free")
+int tp_mm_page_free(struct trace_event_raw_mm_page_free *ctx)
+{
+    if (!in_target_subtree_current()) {
+        return 0;
+    }
+    if (!pass_sample()) {
+        return 0;
+    }
+    __u64 cgid = bpf_get_current_cgroup_id();
+    __u64 bytes = order_to_bytes(ctx->order);
+    if (!bytes) {
+        return 0;
+    }
+    return add_cg_u64((struct bpf_map *)&cg_mem_bytes, cgid, MEM_BYTES_FREE, bytes);
 }
