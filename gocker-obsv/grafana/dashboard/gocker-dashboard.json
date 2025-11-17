@@ -683,7 +683,7 @@
           "refId": "A"
         }
       ],
-      "title": "Page Allocation Pages/s",
+      "title": "Memory Churn Pages/s",
       "type": "timeseries"
     },
     {
@@ -969,8 +969,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "expr": "rate(page_faults_total[30s])",
+          "editorMode": "code",
+          "expr": "rate(page_faults_total[$__rate_interval])",
           "legendFormat": "{{cgroup_id}} ({{type}})",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -978,6 +980,10 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bf134egs7tt6oa"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1058,8 +1064,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "expr": "sum by (cgroup_id, type) (rate(memory_page_faults_total[1m]))",
+          "editorMode": "code",
+          "expr": "sum by (cgroup_id, type) (rate(memory_page_faults_total[$__rate_interval]))",
           "legendFormat": "{{cgroup_id}} ({{type}})",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1163,8 +1171,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\"}[1m])) / 1e9",
+          "editorMode": "code",
+          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\"}[$__rate_interval])) / 1e9",
           "legendFormat": "{{cgroup_id}}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1172,6 +1182,10 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bf134egs7tt6oa"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1252,8 +1266,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"wait\"}[1m])) / (sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\"}[1m])) + sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"wait\"}[1m])))",
+          "editorMode": "code",
+          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"wait\"}[$__rate_interval])) / (sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\"}[$__rate_interval])) + sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"wait\"}[$__rate_interval])))",
           "legendFormat": "{{cgroup_id}}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1261,6 +1277,10 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bf134egs7tt6oa"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1341,8 +1361,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"iowait\"}[1m])) / (sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\"}[1m])) + sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"iowait\"}[1m])))",
+          "editorMode": "code",
+          "expr": "sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"iowait\"}[$__rate_interval])) / (sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"runtime\"}[$__rate_interval])) + sum by (cgroup_id) (rate(cpu_sched_ns_total{type=\"iowait\"}[$__rate_interval])))",
           "legendFormat": "{{cgroup_id}}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1363,6 +1385,10 @@
       "type": "row"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bf134egs7tt6oa"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1443,13 +1469,17 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "expr": "rate(sched_events_total{type=\"switch\"}[30s])",
+          "editorMode": "code",
+          "expr": "rate(sched_events_total{type=\"switch\"}[$__rate_interval])",
           "legendFormat": "{{cgroup_id}} switch",
+          "range": true,
           "refId": "A"
         },
         {
-          "expr": "rate(sched_events_total{type=\"wakeup\"}[30s])",
+          "editorMode": "code",
+          "expr": "rate(sched_events_total{type=\"wakeup\"}[$__rate_interval])",
           "legendFormat": "{{cgroup_id}} wakeup",
+          "range": true,
           "refId": "B"
         }
       ],
@@ -1457,6 +1487,10 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bf134egs7tt6oa"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1537,8 +1571,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "expr": "sum by (cgroup_id) (rate(sched_events_total{job=\"pf-exporter\", type=\"wakeup\"}[2m])) / clamp_min(sum by (cgroup_id) (rate(sched_events_total{job=\"pf-exporter\", type=\"switch\"}[2m])), 1e-9)",
+          "editorMode": "code",
+          "expr": "sum by (cgroup_id) (rate(sched_events_total{job=\"pf-exporter\", type=\"wakeup\"}[$__rate_interval])) / clamp_min(sum by (cgroup_id) (rate(sched_events_total{job=\"pf-exporter\", type=\"switch\"}[$__rate_interval])), 1e-9)",
           "legendFormat": "{{cgroup_id}}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1559,6 +1595,10 @@
       "type": "row"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bf134egs7tt6oa"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1639,8 +1679,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "expr": "sum by (cgroup_id, syscall) (rate(syscall_calls_total[30s]))",
+          "editorMode": "code",
+          "expr": "sum by (cgroup_id, syscall) (rate(syscall_calls_total[$__rate_interval]))",
           "legendFormat": "{{syscall}} {{cgroup_id}}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1648,6 +1690,10 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bf134egs7tt6oa"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1728,8 +1774,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "expr": "(sum by (cgroup_id, syscall) (rate(syscall_latency_nanoseconds_total[30s]))) / ignoring() (sum by (cgroup_id, syscall) (rate(syscall_calls_total[30s])))",
+          "editorMode": "code",
+          "expr": "(sum by (cgroup_id, syscall) (rate(syscall_latency_nanoseconds_total[$__rate_interval]))) / ignoring() (sum by (cgroup_id, syscall) (rate(syscall_calls_total[$__rate_interval])))",
           "legendFormat": "{{syscall}} {{cgroup_id}}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1788,8 +1836,10 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "expr": "topk(5,sum by (cgroup_id) (rate(sched_events_total{job=\"pf-exporter\", type=\"wakeup\"}[5m])) / clamp_min(sum by (cgroup_id) (rate(sched_events_total{job=\"pf-exporter\", type=\"switch\"}[5m])),1e-9))",
+          "editorMode": "code",
+          "expr": "topk(5,sum by (cgroup_id) (rate(sched_events_total{job=\"pf-exporter\", type=\"wakeup\"}[$__rate_interval])) / clamp_min(sum by (cgroup_id) (rate(sched_events_total{job=\"pf-exporter\", type=\"switch\"}[$__rate_interval])),1e-9))",
           "legendFormat": "{{cgroup_id}}",
+          "range": true,
           "refId": "A"
         }
       ],
@@ -1862,12 +1912,12 @@
     ]
   },
   "time": {
-    "from": "now-15m",
+    "from": "now-30m",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "browser",
   "title": "Gocker eBPF Metrics",
   "uid": "gocker-obsv-host",
-  "version": 9
+  "version": 14
 }

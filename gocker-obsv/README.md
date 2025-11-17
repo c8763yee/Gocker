@@ -28,7 +28,7 @@ grafana-server web
  → “+” → Import → 選 grafana-dashboard.json → 選取「Prometheus」資料源
 
 F. 熱更新參數（可選）
-*  把 sample_rate 改 10（降低事件量）
+*  把 sample_rate 改 10（降低採計事件量）
 ```
 curl -XPOST -H 'Content-Type: application/json' \
   -d '{"sample_rate":10}' http://127.0.0.1:2112/admin/config
@@ -43,7 +43,6 @@ G. 備註
 ```
 stat -Lc '%i' /sys/fs/cgroup/gocker/container_name 
 ```
-
 
 ## Metrics 說明（Exporter /metrics）
 
