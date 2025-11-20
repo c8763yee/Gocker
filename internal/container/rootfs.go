@@ -3,13 +3,17 @@ package container
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"gocker/internal/config"
 	"gocker/internal/types"
+	"gocker/pkg"
 
 	"github.com/sirupsen/logrus"
 )
@@ -55,7 +59,43 @@ func SetupRootfs(mountPoint string, imageName, imageTag string) error {
 	// 4. 掛載 OverlayFS
 	log.Infof("正在掛載 OverlayFS, opts: %s", opts)
 	if err := syscall.Mount("overlay", mountPoint, "overlay", 0, opts); err != nil {
-		return fmt.Errorf("掛載 OverlayFS 失敗: %w", err)
+
+		// if mount error is "Device or resource busy", check if the mount point is already mounted
+		// and fstype is overlay
+		if errors.Is(err, syscall.EBUSY) && checkFSType(mountPoint, "overlay") {
+			log.Infof("掛載點 %s 已經掛載 OverlayFS，跳過掛載步驟", mountPoint)
+		} else {
+			return fmt.Errorf("掛載 OverlayFS 失敗: %w", err)
+		}
+	}
+
+	// 4.1 複製eBPF 監控服務檔案到容器目錄
+	srcPath := config.BPFServiceExeHost
+	dstPath := filepath.Join(mountPoint, config.BPFServiceExeContainer)
+
+	exe, err := pkg.GetSelfExecutablePath()
+	if err != nil {
+		log.Warnf("無法獲取執行檔路徑, 使用當前目錄: %v", err)
+		exe = os.Getenv("PWD")
+	}
+	srcPath = filepath.Join(filepath.Dir(exe), config.BPFServiceExeHost)
+	log.Infof("正在複製 eBPF 監控服務檔案到容器: %s -> %s", srcPath, dstPath)
+	os.MkdirAll(filepath.Dir(dstPath), 0755)
+
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("無法開啟 eBPF 監控服務檔案: %w", err)
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return fmt.Errorf("無法建立容器內的 eBPF 監控服務檔案: %w", err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("無法複製 eBPF 監控服務檔案: %w", err)
 	}
 
 	// 5. 執行 pivot_root 將根目錄切換到 mountPoint
@@ -71,9 +111,38 @@ func SetupRootfs(mountPoint string, imageName, imageTag string) error {
 	if err := syscall.Mount("sysfs", "/sys", "sysfs", 0, ""); err != nil {
 		return fmt.Errorf("掛載 /sys 失敗: %w", err)
 	}
-	if err := syscall.Mount("tmpfs", "/dev", "tmpfs", syscall.MS_NOSUID|syscall.MS_STRICTATIME, "mode=755"); err != nil {
-		return fmt.Errorf("掛載 /dev 失敗: %w", err)
-	}
+
+	// mount dev, devpts, tmpfs
+	os.MkdirAll("/dev", 0755)
+	syscall.Mount("tmpfs", "/dev", "tmpfs", 0, "mode=0755")
+	os.MkdirAll("/dev/pts", 0755)
+	os.MkdirAll("/dev/shm", 0755)
+	os.MkdirAll("/tmp", 01777)
+	os.MkdirAll("/run", 0755)
+	syscall.Mount("devpts", "/dev/pts", "devpts", 0, "newinstance,ptmxmode=0666,mode=0620,gid=5")
+	// create symlink for ptmx
+	os.Remove("/dev/ptmx")
+	os.Symlink("pts/ptmx", "/dev/ptmx")
+	// mount /tmp, /run, /dev/shm as tmpfs
+	syscall.Mount("tmpfs", "/tmp", "tmpfs", 0, "mode=1777")
+	syscall.Mount("tmpfs", "/run", "tmpfs", 0, "mode=0755")
+	syscall.Mount("tmpfs", "/dev/shm", "tmpfs", 0, "mode=1777")
+
+	oldUmask := syscall.Umask(0)
+
+	// create essential device nodes
+	syscall.Mknod("/dev/null", syscall.S_IFCHR|0666, int((1<<8)|3)) // major=1, minor=3
+	syscall.Mknod("/dev/zero", syscall.S_IFCHR|0666, int((1<<8)|5))
+	syscall.Mknod("/dev/full", syscall.S_IFCHR|0666, int((1<<8)|7))
+	syscall.Mknod("/dev/random", syscall.S_IFCHR|0666, int((1<<8)|8))
+	syscall.Mknod("/dev/urandom", syscall.S_IFCHR|0666, int((1<<8)|9))
+	syscall.Mknod("/dev/tty", syscall.S_IFCHR|0666, int((5<<8)|0))
+
+	syscall.Umask(oldUmask)
+
+	// set permissions for /tmp and /dev/shm (we've set it at 5.1, but just to be sure)
+	os.Chmod("/tmp", 01777)
+	os.Chmod("/dev/shm", 01777)
 
 	return nil
 }
@@ -137,4 +206,32 @@ func findImageRootfsPath(imageName, imageTag string) (string, error) {
 	}
 
 	return "", fmt.Errorf("在 manifest 中找不到映像 '%s'", searchName)
+}
+
+/*
+檢查mountPoint是否為指定的fstype
+
+/proc/mounts 格式
+
+* device mountPoint fstype options dump pass
+*/
+func checkFSType(mountPoint, fstype string) bool {
+	data, err := os.ReadFile("/proc/mounts")
+	if err != nil {
+		logrus.Warnf("讀取 /proc/mounts 失敗: %v", err)
+		return false
+	}
+
+	for line := range strings.SplitSeq(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && fields[1] == mountPoint {
+			if fields[2] != fstype {
+				logrus.Warnf("掛載點 %s 的 fstype 為 %s, 不是預期的 %s", mountPoint, fields[2], fstype)
+				return false
+			}
+			return true
+		}
+	}
+	logrus.Warnf("找不到掛載點 %s", mountPoint)
+	return false
 }

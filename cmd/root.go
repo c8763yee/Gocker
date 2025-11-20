@@ -2,12 +2,15 @@ package cmd
 
 import (
 	"log"
+	// "net/http"
 	"os"
 
+	// "github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"gocker/internal/config"
+	"gocker/internal/network"
 )
 
 var logLevel string
@@ -28,6 +31,11 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			log.Fatalf("Invalid log level: %v", err)
 		}
+
+		if err := network.SetupBridge(); err != nil {
+			logrus.Fatalf("初始化 gocker 網路失敗: %v", err)
+		}
+
 		logrus.SetLevel(level)
 		logrus.SetOutput(os.Stdout)
 	},

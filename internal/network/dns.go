@@ -6,14 +6,17 @@ import (
 	"os"
 
 	"gocker/internal/config"
+
+	"github.com/sirupsen/logrus"
 )
 
 // SetupDNS 設定容器的 DNS
-func SetupDNS() {
+func SetupDNS() error {
+	// 寫入 /etc/resolv.conf
 	if err := os.WriteFile("/etc/resolv.conf", []byte(config.DNSServers), 0644); err != nil {
-		fmt.Printf("警告: 設定 DNS 失敗: %v\n", err)
-		return
+		return fmt.Errorf("寫入 /etc/resolv.conf 失敗: %w", err)
 	}
 
-	fmt.Println("DNS 設定完成")
+	logrus.Info("DNS 設定完成")
+	return nil
 }

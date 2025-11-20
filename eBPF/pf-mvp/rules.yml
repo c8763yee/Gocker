@@ -1,0 +1,11 @@
+groups:
+  - name: pf.rules
+    rules:
+      - alert: HighPageFaultRate
+        expr: rate(page_faults_total[1m]) > 1000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High page fault rate"
+          description: "page_faults_total > 1000/s over 2m"

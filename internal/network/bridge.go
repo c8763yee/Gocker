@@ -8,6 +8,7 @@ import (
 
 	"gocker/internal/config"
 
+	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 )
 
@@ -19,27 +20,27 @@ type IPTablesRule struct {
 	Args   []string
 }
 
-// SetupBridge 設定網橋
+// SetupBridge 設定Bridge
 func SetupBridge() error {
-	// 檢查網橋是否已存在
+	// 檢查Bridge是否已存在
 	if bridge, err := netlink.LinkByName(config.BridgeName); err == nil {
-		fmt.Printf("網橋 '%s' 已經存在\n", config.BridgeName)
 		return ensureBridgeIP(bridge)
 	}
 
-	// 建立新的網橋
+	logrus.Infof("Bridge '%s' 不存在，開始建立...", config.BridgeName)
+	// 建立新的Bridge
 	if err := createBridge(); err != nil {
-		return fmt.Errorf("建立網橋失敗: %v", err)
+		return fmt.Errorf("建立Bridge失敗: %v", err)
 	}
 
 	// 設定 IP 位址
 	if err := setBridgeIP(); err != nil {
-		return fmt.Errorf("設定網橋 IP 失敗: %v", err)
+		return fmt.Errorf("設定Bridge IP 失敗: %v", err)
 	}
 
-	// 啟動網橋
+	// 啟動Bridge
 	if err := enableBridge(); err != nil {
-		return fmt.Errorf("啟動網橋失敗: %v", err)
+		return fmt.Errorf("啟動Bridge失敗: %v", err)
 	}
 
 	// 設定 iptables 規則
@@ -50,9 +51,9 @@ func SetupBridge() error {
 	return nil
 }
 
-// createBridge 建立網橋
+// createBridge 建立Bridge
 func createBridge() error {
-	fmt.Printf("建立網橋 '%s'\n", config.BridgeName)
+	fmt.Printf("建立Bridge '%s'\n", config.BridgeName)
 
 	bridge := &netlink.Bridge{
 		LinkAttrs: netlink.LinkAttrs{
@@ -63,7 +64,7 @@ func createBridge() error {
 	return netlink.LinkAdd(bridge)
 }
 
-// setBridgeIP 設定網橋 IP
+// setBridgeIP 設定Bridge IP
 func setBridgeIP() error {
 	bridge, err := netlink.LinkByName(config.BridgeName)
 	if err != nil {
@@ -78,7 +79,7 @@ func setBridgeIP() error {
 	return netlink.AddrAdd(bridge, addr)
 }
 
-// enableBridge 啟動網橋
+// enableBridge 啟動Bridge
 func enableBridge() error {
 	bridge, err := netlink.LinkByName(config.BridgeName)
 	if err != nil {
@@ -88,7 +89,7 @@ func enableBridge() error {
 	return netlink.LinkSetUp(bridge)
 }
 
-// ensureBridgeIP 確保網橋有 IP 位址
+// ensureBridgeIP 確保Bridge有 IP 位址
 func ensureBridgeIP(bridge netlink.Link) error {
 	addrs, err := netlink.AddrList(bridge, netlink.FAMILY_V4)
 	if err != nil {
