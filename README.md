@@ -1,28 +1,64 @@
-# 操作
-第一次使用
+# Installation
+We provide a Makefile to automate dependency checking, compilation, and installation.
+1. Clone the repository
+```bash
+git clone [https://github.com/ArBin1020/Gocker.git](https://github.com/ArBin1020/Gocker.git)
+cd gocker
+```
+2. Build and Install
+Run the following command to check dependencies, build the binaries, and install them to your system path:
 ```bash
 make check-deps && make && sudo make install
 ```
-
-# Debug
-你可以查看錯誤日誌
+# Quick Start
+1. Explore Commands
+First, check the available commands and flags using the help option:
 ```bash
-sudo journalctl -u gocker-daemon.service -f
+gocker --help
 ```
-或是創建的容器錯誤資訊
+<details> <summary>Click to see output</summary>
+
+```Plaintext
+Gocker is a simple container runtime written in Go.
+
+Usage:
+  gocker [command]
+
+Available Commands:
+  adjust      Adjust the resources of a running container
+  completion  Generate the autocompletion script for the specified shell
+  exec        Execute commands within a running container
+  help        Help about any command
+  images      List all locally stored images
+  ps          List all containers
+  pull        Pull an image from a remote repository
+  rm          Remove container by ID or NAME.
+  run         Run a command in a new container
+  start       Restart a stopped container
+  stop        Stop a running container
+
+Flags:
+  -h, --help               help for gocker
+  -l, --log-level string   Set the logging level ("trace"|"debug"|"info"|"warn"|"error"|"fatal"|"panic") (default "debug")
+
+Use "gocker [command] --help" for more information about a command.
+```
+</details>
+
+2. Pull an Image
+Download a lightweight image (e.g., Alpine Linux) from a remote repository.
 ```bash
-LATEST=$(ls -t /var/lib/gocker/containers/ | head -1)
-sudo cat /var/lib/gocker/containers/$LATEST/init.log
+sudo gocker pull alpine:latest
+```
+3. Run a Container
+Start a new container in interactive mode (-it). You will be dropped into a shell inside the isolated environment.
+```bash
+sudo gocker run -it alpine /bin/sh
 ```
 
-# intro
-目前操作傳輸
-cli -> socket -> daemon
+# Uninstall
+```bash
+sudo make uninstall
+```
 
-# TODO
-目前修改進度：
-1. ps 正常
-2. run、exec 須更多測試
-3. start還需完善
-4. 其餘cmd功能還未與daemon client接上
-5. rootfs中ebpf功能有錯誤 還未解決
+
